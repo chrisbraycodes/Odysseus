@@ -25,7 +25,14 @@ def setup_workspace_routes():
 
         # Resolve symlinks so the reported path is canonical and the UI navigates
         # real directories (defends against symlink games in displayed paths).
-        target = os.path.realpath(os.path.expanduser(path.strip() or "~"))
+        raw = path.strip()
+        if raw:
+            target = os.path.realpath(os.path.expanduser(raw))
+        elif os.path.isdir("/workspace"):
+            # Docker Desktop mount: start browse at the shared workspace root.
+            target = os.path.realpath("/workspace")
+        else:
+            target = os.path.realpath(os.path.expanduser("~"))
         if not os.path.isdir(target):
             target = os.path.realpath(os.path.expanduser("~"))
 

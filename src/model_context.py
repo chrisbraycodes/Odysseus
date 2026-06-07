@@ -287,6 +287,22 @@ def _query_context_length(endpoint_url: str, model: str) -> int:
         except Exception:
             pass
 
+        # HuggingFace TGI /text-generation-inference exposes real serving limits
+        # on /info (max_total_tokens). Without this probe we fall back to the
+        # model-name table (e.g. 131k for Qwen2.5) and overshoot small local
+        # deployments capped at 8k.
+        try:
+            base = endpoint_url.split("/v1")[0] if "/v1" in endpoint_url else endpoint_url.rsplit("/", 1)[0]
+            r = httpx.get(f"{base}/info", timeout=REQUEST_TIMEOUT)
+            if r.is_success:
+                info = r.json()
+                max_total = info.get("max_total_tokens")
+                if max_total and isinstance(max_total, int) and max_total > 0:
+                    logger.info(f"TGI /info reports max_total_tokens={max_total} for {model}")
+                    return max_total
+        except Exception:
+            pass
+
     # GitHub Copilot's /models requires auth + X-GitHub-Api-Version headers that
     # aren't available here; an unauthenticated probe just 400s. All Copilot
     # picker models are major API models covered by the known-context table, so

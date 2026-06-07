@@ -30,6 +30,73 @@ function Fail($msg) {
     exit 1
 }
 
+function Test-PortInUse {
+    param([string]$TargetHost, [int]$TargetPort)
+    $probeHost = if ($TargetHost -in @("0.0.0.0", "::")) { "127.0.0.1" } else { $TargetHost }
+    $client = $null
+    try {
+        $client = New-Object System.Net.Sockets.TcpClient
+        $connect = $client.BeginConnect($probeHost, $TargetPort, $null, $null)
+        if ($connect.AsyncWaitHandle.WaitOne(500, $false) -and $client.Connected) {
+            return $true
+        }
+    } catch {
+        return $false
+    } finally {
+        if ($client) { $client.Close() }
+    }
+    return $false
+}
+
+function Assert-PortAvailable {
+    param([string]$TargetHost, [int]$TargetPort)
+    if (-not (Test-PortInUse $TargetHost $TargetPort)) { return }
+
+    $urlHost = if ($TargetHost -in @("0.0.0.0", "::")) { "127.0.0.1" } else { $TargetHost }
+    $hints = @(
+        "Port $TargetPort is already in use on $urlHost.",
+        "",
+        "Odysseus may already be running (often via Docker). Try opening:",
+        "  http://${urlHost}:$TargetPort",
+        "",
+        "To run natively instead, stop the other instance first, for example:",
+        "  docker compose down",
+        "",
+        "Or start on a different port:",
+        "  start.bat -Port 7001"
+    )
+    Fail ($hints -join [Environment]::NewLine)
+}
+
+function Repair-FastEmbedCacheIfBroken {
+    $cacheDir = Join-Path $PSScriptRoot "data\fastembed_cache"
+    if (-not (Test-Path $cacheDir)) { return }
+
+    $snapshotRoot = Join-Path $cacheDir "models--qdrant--all-MiniLM-L6-v2-onnx\snapshots"
+    if (-not (Test-Path $snapshotRoot)) { return }
+
+    foreach ($snap in (Get-ChildItem $snapshotRoot -Directory -ErrorAction SilentlyContinue)) {
+        $model = Join-Path $snap.FullName "model.onnx"
+        if (-not (Test-Path $model)) { continue }
+
+        $broken = $false
+        try {
+            $length = (Get-Item $model -Force).Length
+            if ($length -lt 1000) { $broken = $true }
+        } catch {
+            $broken = $true
+        }
+
+        if ($broken) {
+            Write-Host ""
+            Write-Host "FastEmbed cache has broken symlinks (common after Docker + native on the same data folder)." -ForegroundColor Yellow
+            Write-Host "Removing cache so embeddings can re-download for native Windows..." -ForegroundColor Yellow
+            Remove-Item $cacheDir -Recurse -Force
+            return
+        }
+    }
+}
+
 function Find-GitBash {
     $cmd = Get-Command bash -ErrorAction SilentlyContinue
     if ($cmd) { return $cmd.Source }
@@ -120,6 +187,8 @@ Write-Step "Running first-time setup"
 & $venvPy setup.py
 if ($LASTEXITCODE -ne 0) { Fail "setup.py failed." }
 
+Repair-FastEmbedCacheIfBroken
+
 # 5. Friendly note about Git Bash (full Cookbook / agent-shell parity)
 if (-not (Find-GitBash)) {
     Write-Host ""
@@ -130,6 +199,7 @@ if (-not (Find-GitBash)) {
 }
 
 # 6. Start the server (use `python -m uvicorn` - bare `uvicorn` may not be on PATH)
+Assert-PortAvailable $BindHost $Port
 Write-Step ("Starting Odysseus at http://{0}:{1}" -f $BindHost, $Port)
 Write-Host "Press Ctrl+C to stop."
 Write-Host ""

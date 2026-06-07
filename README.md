@@ -296,7 +296,36 @@ Local GPU *serving* of vLLM/SGLang needs Linux/WSL2; for a local model on Window
 Open `http://localhost:7000`, log in with the generated admin password,
 and configure everything else inside **Settings**.
 
+### Local context benchmark (this deployment)
+
+This install was benchmarked on **Windows 11 + RTX 3090 24GB (eGPU over USB-C)** with
+**Qwen2.5-Coder-7B** served by TGI (`vllm-server` on port 8000) and Odysseus in Docker
+on port 7000.
+
+| Finding | Value |
+|---------|-------|
+| Max stable server context | **16,384** total / **8,192** input (was 8,192 / 4,096) |
+| Plain chat input | **~7,667** tokens |
+| Agent user budget | **~4,577** tokens (`agent_input_token_budget` in `data/settings.json`) |
+
+Full methodology, sweep table, agent overhead breakdown, and restore steps:
+**[docs/context-benchmark.md](docs/context-benchmark.md)**. Raw JSON:
+[`data/max_context_sweep.json`](data/max_context_sweep.json),
+[`data/context_benchmark.json`](data/context_benchmark.json).
+
 ## Troubleshooting & Advanced Setup
+
+### Agent stops responding or hits context errors (local models)
+
+If chat works but **Agent** mode goes silent or the model errors on long prompts, the
+serving stack may cap context far below the model card (common with TGI `--max-total-tokens`
+and VRAM limits). Odysseus probes TGI `/info` when possible; tune
+`agent_input_token_budget` in Settings or `data/settings.json`.
+
+For a worked example on this machine (RTX 3090 eGPU, Qwen2.5-Coder-7B, 16K max stable),
+see **[docs/context-benchmark.md](docs/context-benchmark.md)**. To create/edit files on your
+Desktop from the browser: Agent mode + Shell toggle + workspace under `/workspace/...`
+(see that doc’s “browser → files on Desktop” section).
 
 ### `chromadb-client` conflicts with embedded ChromaDB
 If `chromadb-client` (the lightweight HTTP-only package) is installed alongside the full `chromadb` package, Odysseus starts but ChromaDB silently falls back to HTTP-only mode and fails.

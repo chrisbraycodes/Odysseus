@@ -38,7 +38,7 @@ from core.platform_compat import (
     pid_alive,
 )
 
-_DATA_DIR = Path(os.environ.get("DATA_DIR", "data"))
+_DATA_DIR = Path(os.environ.get("DATA_DIR", "data")).resolve()
 _JOBS_DIR = _DATA_DIR / "bg_jobs"
 _STORE = _DATA_DIR / "bg_jobs.json"
 
@@ -86,9 +86,23 @@ def launch(command: str, session_id: str, cwd: Optional[str] = None,
     outlives the request/stream that started it.
     """
     _JOBS_DIR.mkdir(parents=True, exist_ok=True)
+    command = (command or "").strip()
+    if not command:
+        raise ValueError("bg_jobs.launch: empty command")
+
+    # Don't stack identical running jobs in one session (weak models retry in a loop).
+    jobs = _load()
+    for rec in jobs.values():
+        if (
+            rec.get("session_id") == session_id
+            and rec.get("status") == "running"
+            and (rec.get("command") or "").strip() == command
+        ):
+            return rec
+
     job_id = uuid.uuid4().hex[:12]
-    log_path = _JOBS_DIR / f"{job_id}.log"
-    exit_path = _JOBS_DIR / f"{job_id}.exit"
+    log_path = (_JOBS_DIR / f"{job_id}.log").resolve()
+    exit_path = (_JOBS_DIR / f"{job_id}.exit").resolve()
 
     # The user command goes in its OWN script file, run as a child `bash`. This
     # is what isolates it: an `exit` inside it only ends that child (so the
@@ -105,10 +119,14 @@ def launch(command: str, session_id: str, cwd: Optional[str] = None,
         # break the wrapper. `$?` is the child's real exit status. Paths are
         # emitted as POSIX (forward-slash) + shell-quoted so Git Bash on Windows
         # handles drive paths and spaces correctly.
-        cmd_path = _JOBS_DIR / f"{job_id}.cmd.sh"
-        cmd_path.write_text(command + "\n", encoding="utf-8")
+        cmd_path = (_JOBS_DIR / f"{job_id}.cmd.sh").resolve()
+        cmd_lines = []
+        if cwd:
+            cmd_lines.append(f"cd {shlex.quote(cwd)}")
+        cmd_lines.append(command)
+        cmd_path.write_text("\n".join(cmd_lines) + "\n", encoding="utf-8")
         lp, xp, cp = (shlex.quote(git_bash_path(p)) for p in (log_path, exit_path, cmd_path))
-        script_path = _JOBS_DIR / f"{job_id}.sh"
+        script_path = (_JOBS_DIR / f"{job_id}.sh").resolve()
         script_path.write_text(
             f"bash {cp} > {lp} 2>&1\n"
             f"echo $? > {xp}\n",
@@ -118,9 +136,13 @@ def launch(command: str, session_id: str, cwd: Optional[str] = None,
     else:
         # Windows without any bash installed: cmd.exe wrapper. The command runs
         # in its own child .cmd so %ERRORLEVEL% is the command's real exit code.
-        child_path = _JOBS_DIR / f"{job_id}.child.cmd"
-        child_path.write_text("@echo off\r\n" + command + "\r\n", encoding="utf-8")
-        script_path = _JOBS_DIR / f"{job_id}.cmd"
+        child_path = (_JOBS_DIR / f"{job_id}.child.cmd").resolve()
+        child_body = ""
+        if cwd:
+            child_body += f'cd /d "{cwd}"\r\n'
+        child_body += command + "\r\n"
+        child_path.write_text("@echo off\r\n" + child_body, encoding="utf-8")
+        script_path = (_JOBS_DIR / f"{job_id}.cmd").resolve()
         script_path.write_text(
             "@echo off\r\n"
             f'call "{child_path}" > "{log_path}" 2>&1\r\n'
@@ -129,12 +151,14 @@ def launch(command: str, session_id: str, cwd: Optional[str] = None,
         )
         argv = [os.environ.get("ComSpec", "cmd.exe"), "/c", str(script_path)]
 
+    # Wrapper scripts live under data/bg_jobs with relative paths in their text.
+    # Never set Popen cwd to the user workspace — that breaks log/exit writes.
     proc = subprocess.Popen(
         argv,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
         stdin=subprocess.DEVNULL,
-        cwd=cwd or None,
+        cwd=str(_DATA_DIR.parent),
         **detached_popen_kwargs(),  # detach from the request lifecycle (setsid / DETACHED_PROCESS)
     )
 
@@ -151,8 +175,8 @@ def launch(command: str, session_id: str, cwd: Optional[str] = None,
         "followed_up": False,       # has the agent been re-invoked with the result?
         "log_path": str(log_path),
         "exit_path": str(exit_path),
+        "cwd": cwd,
     }
-    jobs = _load()
     jobs[job_id] = rec
     _save(jobs)
     return rec

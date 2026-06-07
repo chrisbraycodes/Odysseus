@@ -62,7 +62,9 @@ _AGENT_PREAMBLE = """\
 You are an AI assistant with tool access. You can run shell commands, execute Python, search the web, \
 read/write files, create and edit documents, generate images, manage memories, and more. \
 To use a tool, write a fenced code block with the tool name as the language tag. \
-The block executes automatically and you see the output."""
+The block executes automatically and you see the output. \
+When the user asks you to create, build, install, or run something: DO IT with tool blocks — \
+do NOT write numbered tutorials or paste commands for the user to copy. At most one short sentence, then ```bash blocks."""
 
 _AGENT_RULES = """\
 ## Rules
@@ -181,6 +183,7 @@ TOOL_SECTIONS = {
 Run any shell command. Output is returned to you. Use for: installing packages, checking files, git, system info, process management, etc.
 Do NOT use bash/curl for web lookup/search/latest/current requests when `web_search` or `web_fetch` is available.
 NEVER use bash to create or change files — no `>`/`>>` redirects, no heredocs (`cat > f << 'EOF'`), no `tee`, `sed -i`, `awk -i`, no `python -c` that writes. To CREATE or fully rewrite a file use `write_file`; to change part of an existing file use `edit_file`. Those show a diff and are the ONLY allowed way to write files. (bash is for read-only inspection: `ls`, `cat` to READ, `grep`, `git status`/`git diff`, builds, installs.)
+Node.js: create projects in the active workspace cwd; do not copy `node_modules` across folders or in/out of the container — copy `package.json` (+ lockfile) and run `npm install`/`npm ci` at the destination. `npx create-react-app` and `npm install` belong here; use `#!bg` when they may exceed ~20s (Odysseus also auto-backgrounds installs and dev servers). For `npm start` / Vite dev: just run the command — Odysseus auto-runs `npm install` when deps are missing, sets `HOST=0.0.0.0`, and returns the preview URL (http://127.0.0.1:3000 or :5173). Tell the user to open that URL in a new tab.
 For LONG-running commands (package installs, pip/npm, ffmpeg, model downloads, training, builds — anything that may take more than ~20s), make the FIRST line `#!bg` to run it in the BACKGROUND. You get a job id back immediately and are automatically re-invoked with the full output when it finishes — so you never block the chat waiting. Example:
 ```bash
 #!bg
@@ -1420,7 +1423,10 @@ def build_active_plan_note(approved_plan: str) -> str:
         "`- [x]` so progress stays visible in the user's plan window. If the user "
         "asks to change the plan, call `update_plan` with the revised checklist. "
         "Do the next unchecked item until all are done. Do not skip, reorder, or "
-        "invent steps; if a step is genuinely impossible, say so and stop.\n\n"
+        "invent steps; if a step is genuinely impossible, say so and stop.\n"
+        "Shell cwd is injected automatically each turn — do NOT run `pwd` or `cd` "
+        "just to verify location; mark those steps done and execute the real work "
+        "(e.g. `npm start`).\n\n"
         "Current plan:\n"
         + approved_plan.strip()
     )
@@ -1630,23 +1636,76 @@ async def stream_agent_loop(
         # PREPEND (not append) so it dominates the large base prompt — appended
         # at the end, small models ignored it and asked the user for code. The
         # folder IS the project; the agent must explore it, not ask.
+        try:
+            from src.direct_shell import last_user_message
+            from src.shell_orchestration import (
+                cwd_system_note,
+                plan_auto_notes,
+                resolve_effective_workspace,
+            )
+            _last_user = last_user_message(messages)
+        except Exception:
+            _last_user = ""
+            cwd_system_note = plan_auto_notes = resolve_effective_workspace = None  # type: ignore
+        if resolve_effective_workspace:
+            workspace = resolve_effective_workspace(
+                workspace, _last_user, (approved_plan or "")
+            ) or workspace
         _ws_note = (
             f"## ACTIVE WORKSPACE — READ FIRST\n"
             f"The user is working in this folder: {workspace}\n"
-            f"It IS the project. bash/python run with cwd set here and "
-            f"read_file/write_file are confined to it (paths outside are rejected).\n"
+            f"It IS the project. bash/python already run with cwd set to this folder — "
+            f"do NOT `cd` into it again. Use relative paths (e.g. `ls -la`, "
+            f"`npx create-react-app my-app`). If you must reference the absolute path "
+            f"in a shell command, quote it (paths may contain spaces).\n"
+            f"read_file/write_file/edit_file are confined to this folder (paths outside "
+            f"are rejected).\n"
             f"When the user says \"the code\" / \"this project\" / \"the workspace\" "
             f"or asks to review/find/edit something WITHOUT a path, they mean THIS "
             f"folder. Do NOT ask the user for code or a path, and do NOT read a file "
             f"literally named \"workspace\". ALWAYS start by exploring it yourself: "
-            f"run `bash` → `git ls-files` (or `ls -R`) to see the files, then "
-            f"read_file the relevant ones by path RELATIVE to the workspace."
+            f"run `bash` → `ls -la` (or `ls -R`) to see the files, then "
+            f"read_file the relevant ones by path RELATIVE to the workspace.\n"
+            f"Node/npm projects: scaffold HERE (`npx create-react-app <name>`, "
+            f"`npm init`, etc.) — never create under /app and move later. "
+            f"NEVER `cp`/`mv`/`tar` `node_modules` (bind mounts make that slow "
+            f"and brittle). Copy only source + lockfiles (`package.json`, "
+            f"`package-lock.json`); run `npm install` or `npm ci` in the "
+            f"destination after files arrive.\n"
+            f"Scaffold requests (React app, npm project, etc.): run "
+            f"```bash\\nnpx create-react-app <name>\\n``` immediately — cwd is "
+            f"already here. No `cd`, no `sudo`, no tutorial steps.\n"
+            f"Dev preview: run ```bash\\nnpm start\\n``` (or `npm run dev` / `vite`) — "
+            f"Odysseus auto-installs deps, configures Docker networking, and returns "
+            f"the host preview URL. User opens it in a new browser tab."
         )
+        if cwd_system_note:
+            _cwd = cwd_system_note(workspace)
+            if _cwd:
+                _ws_note = _cwd + "\n\n" + _ws_note
+        if plan_auto_notes and approved_plan:
+            _pa = plan_auto_notes(approved_plan, workspace)
+            if _pa:
+                _ws_note = _ws_note + "\n\n" + _pa
         if messages and messages[0].get("role") == "system":
             messages[0]["content"] = _ws_note + "\n\n" + (messages[0].get("content") or "")
         else:
             messages.insert(0, {"role": "system", "content": _ws_note})
         logger.info("[workspace] active for this turn: %s", workspace)
+    # User pasted a literal shell command (e.g. "npx create-react-app batman").
+    # Small models answer with tutorials unless we pin execute-now at the top.
+    try:
+        from src.direct_shell import direct_shell_system_note, last_user_message
+        _user_cmd = last_user_message(messages)
+        _ds_note = direct_shell_system_note(_user_cmd)
+        if _ds_note and "bash" not in (disabled_tools or set()):
+            if messages and messages[0].get("role") == "system":
+                messages[0]["content"] = _ds_note + "\n\n" + (messages[0].get("content") or "")
+            else:
+                messages.insert(0, {"role": "system", "content": _ds_note})
+            logger.info("[direct-shell] pinned execute-now note for: %r", _user_cmd[:80])
+    except Exception:
+        pass
     if plan_mode:
         # Steer the model to investigate-then-propose. Hard tool gating handles
         # every write path except shell; this directive is what keeps the
@@ -1776,6 +1835,12 @@ async def stream_agent_loop(
         r"\b[^.\n]{0,140}",
         re.IGNORECASE,
     )
+    # Tutorial spiral: long prose + numbered steps, zero tool blocks.
+    _TUTORIAL_RE = re.compile(
+        r"\b(?:step\s*\d+|additionally|let me know if|you can verify|"
+        r"ensure that|troubleshoot|step-by-step)\b",
+        re.IGNORECASE,
+    )
     _awaiting_user = False  # set by ask_user → end the turn and wait for a choice
 
     # Document streaming state (persists across rounds)
@@ -1787,6 +1852,53 @@ async def stream_agent_loop(
     # using tools — i.e. it was cut off, not finished. Drives a "Continue" event
     # so the user can resume instead of the turn silently stalling.
     _exhausted_rounds = False
+
+    # Auto-orchestration: run direct shell commands (npm start, pwd, …) without
+    # waiting for a weak model to emit a ```bash block.
+    if session_id and "bash" not in (disabled_tools or set()) and not plan_mode:
+        try:
+            from src.direct_shell import last_user_message
+            from src.shell_orchestration import (
+                format_tool_sse,
+                run_auto_shell_if_needed,
+            )
+            _auto_user = last_user_message(messages)
+            _auto = await run_auto_shell_if_needed(
+                user_msg=_auto_user,
+                workspace=workspace,
+                approved_plan=approved_plan or "",
+                session_id=session_id,
+                owner=owner,
+            )
+            if _auto:
+                if _auto.workspace:
+                    workspace = _auto.workspace
+                _start_sse, _out_sse, _te = format_tool_sse(
+                    _auto.command, _auto.desc, _auto.result
+                )
+                yield _start_sse
+                yield _out_sse
+                tool_events.append(_te)
+                if _auto.skip_llm:
+                    full_response = _auto.assistant_message
+                    round_texts = [full_response]
+                    yield f"data: {json.dumps({'delta': full_response})}\n\n"
+                    total_duration = time.time() - total_start
+                    metrics = _compute_final_metrics(
+                        messages, full_response, total_duration, time_to_first_token,
+                        context_length, real_input_tokens, real_output_tokens,
+                        has_real_usage, tool_events, round_texts, model=actual_model,
+                        last_round_input_tokens=last_round_input_tokens,
+                        prep_timings=prep_timings,
+                        backend_gen_tps=backend_gen_tps,
+                        backend_prefill_tps=backend_prefill_tps,
+                    )
+                    metrics["requested_model"] = requested_model
+                    yield f"data: {json.dumps({'type': 'metrics', 'data': metrics})}\n\n"
+                    yield "data: [DONE]\n\n"
+                    return
+        except Exception as _auto_shell_err:
+            logger.warning("[auto-shell] skipped: %s", _auto_shell_err)
 
     for round_num in range(1, max_rounds + 1):
         round_response = ""
@@ -2149,28 +2261,44 @@ async def stream_agent_loop(
             # promise: short response (<400 chars), no fenced code/answer,
             # and an action-intent phrase was matched. Long answers that
             # happen to contain "let me know" are not stalls.
-            _looks_like_promise = (
-                _intent_match is not None
-                and len(_intent_text) < 400
-                and "```" not in _intent_text
+            _looks_like_tutorial = (
+                "```" not in _intent_text
+                and len(_intent_text) > 180
+                and _TUTORIAL_RE.search(_intent_text)
                 and _intent_nudge_count < _MAX_INTENT_NUDGES
             )
+            _looks_like_promise = (
+                (
+                    _intent_match is not None
+                    and len(_intent_text) < 400
+                    and "```" not in _intent_text
+                )
+                or _looks_like_tutorial
+            ) and _intent_nudge_count < _MAX_INTENT_NUDGES
             if _looks_like_promise:
                 _intent_nudge_count += 1
-                _matched_phrase = _intent_match.group(0).strip()
+                _matched_phrase = (
+                    _intent_match.group(0).strip() if _intent_match
+                    else "a long troubleshooting tutorial"
+                )
                 logger.info(f"[agent] intent-without-action nudge #{_intent_nudge_count} on round {round_num}: {_matched_phrase!r}")
-                messages.append({
-                    "role": "system",
-                    "content": (
-                        f"You just wrote: \"{_matched_phrase}\" — but ended the "
-                        "turn without making the actual tool call. The user can "
-                        "see you announced the action but didn't run it, which "
-                        "is the most frustrating thing you can do. "
-                        "DO IT NOW: emit the actual function call this turn. "
-                        "If you decided not to do it after all, say so plainly in "
-                        "one sentence instead of restating the plan."
-                    ),
-                })
+                _nudge = (
+                    f"You just wrote: \"{_matched_phrase}\" — but ended the "
+                    "turn without making the actual tool call. The user can "
+                    "see you announced the action but didn't run it, which "
+                    "is the most frustrating thing you can do. "
+                    "DO IT NOW: emit the actual function call this turn. "
+                    "If you decided not to do it after all, say so plainly in "
+                    "one sentence instead of restating the plan."
+                )
+                if _looks_like_tutorial:
+                    _nudge = (
+                        "You wrote a tutorial instead of using tools. STOP. "
+                        "The user wants you to EXECUTE, not explain. "
+                        "Respond with ONE ```bash``` block for the next concrete "
+                        "step (or say BLOCKED in one sentence if you truly cannot)."
+                    )
+                messages.append({"role": "system", "content": _nudge})
                 # Visible signal in the stream so the user knows we caught it.
                 yield f'data: {json.dumps({"type": "agent_step", "round": round_num + 1})}\n\n'
                 continue

@@ -14,6 +14,7 @@ import logging
 import os
 import pathlib
 import re
+import shlex
 import sys
 import time
 from typing import Any, Awaitable, Callable, Dict, Optional, Tuple
@@ -642,6 +643,42 @@ def _split_bg_marker(content: str):
     return False, content
 
 
+def _prepare_bash_command(content: str, workspace: Optional[str]) -> str:
+    """Normalize agent shell commands for the Odysseus container.
+
+    - Strip ``sudo`` (not available).
+    - Auto-quote workspace paths that contain spaces so ``/workspace/test workspace``
+      does not split into two shell arguments.
+    - Auto ``npm install``, dev-server env (``HOST=0.0.0.0``), and background
+      long-running dev servers for workspace Node projects (see workspace_dev).
+    """
+    is_bg, body = _split_bg_marker(content)
+    cmd = body.strip()
+    cmd = re.sub(r"\bsudo\s+", "", cmd)
+    if workspace and " " in workspace:
+        ws_esc = re.escape(workspace)
+
+        def _quote_match(m: re.Match) -> str:
+            return shlex.quote(m.group(0))
+
+        cmd = re.sub(ws_esc + r"(?:/[^\s;&|>]*)?", _quote_match, cmd)
+    from src.workspace_dev import is_dev_server_command, prepare_node_workspace_command
+
+    cmd, _preview = prepare_node_workspace_command(cmd, workspace)
+    # Long installs / dev servers block the browser stream — run detached so the
+    # agent can finish the turn and resume when output is ready.
+    if not is_bg and (
+        re.search(
+            r"\b(npx\s+create-react-app|npm\s+install|npm\s+ci|yarn\s+install|pnpm\s+install)\b",
+            cmd,
+            re.I,
+        )
+        or is_dev_server_command(cmd)
+    ):
+        is_bg = True
+    return ("#!bg\n" + cmd) if is_bg else cmd
+
+
 async def _direct_fallback(
     tool: str,
     content: str,
@@ -1210,6 +1247,9 @@ async def execute_tool_block(
         logger.warning("Public tool policy blocked owner=%r tool=%s", owner, tool)
         return desc, result
 
+    if tool == "bash":
+        content = _prepare_bash_command(content, workspace)
+
     # ask_user: the agent poses a multiple-choice question to the user to get a
     # decision/clarification. This is a pure UI-control marker — no subprocess,
     # no filesystem. It returns an `ask_user` payload that the agent loop turns
@@ -1299,19 +1339,25 @@ async def execute_tool_block(
         _is_bg, _bg_cmd = _split_bg_marker(content)
         if _is_bg and _bg_cmd:
             from src import bg_jobs
+            from src.workspace_dev import dev_server_preview_url, preview_note
+
             rec = bg_jobs.launch(_bg_cmd, session_id=session_id, cwd=workspace or _AGENT_WORKDIR)
             short = _bg_cmd.strip().split(chr(10))[0][:80]
             desc = f"bash (background): {short}"
+            preview = dev_server_preview_url(_bg_cmd)
             result = {
                 "output": (
                     f"Started background job `{rec['id']}`. It is running detached — "
                     f"do NOT wait for it or poll it. You will be automatically re-invoked "
                     f"with its full output when it finishes. Continue with other work, or "
                     f"end your turn now and resume when the result arrives."
+                    + preview_note(preview)
                 ),
                 "exit_code": 0,
                 "bg_job_id": rec["id"],
             }
+            if preview:
+                result["dev_preview_url"] = preview
             logger.info(f"Tool executed: {desc} -> bg job {rec['id']}")
             return desc, result
 

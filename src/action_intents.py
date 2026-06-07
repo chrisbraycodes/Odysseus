@@ -105,6 +105,9 @@ _ROUTING_PATTERNS: tuple[tuple[str, str, Pattern[str]], ...] = tuple(
         # command do?") and incidental uses ("My cat ate my homework").
         ("shell", "imperative shell command request", rf"{_PLEASE}(deploy|build|install|restart|reboot|kill|tail|grep|cat|ls|cd|cp|mv|rm)\b\s+\S+"),
         ("shell", "assistant shell command request", rf"{_ACTION_QUESTION}(deploy|build|install|restart|reboot|kill|tail|grep|cat|ls|cd|cp|mv|rm)\b\s+\S+"),
+        # Literal one-line shell commands (e.g. "npx create-react-app batman").
+        ("shell", "direct npx/npm command", r"^\s*(?:npx|npm|yarn|pnpm)\s+\S+"),
+        ("shell", "direct create-react-app command", r"^\s*create-react-app\s+\S+"),
         ("shell", "system/file check request", r"\b(check|see)\s+(if|whether|what)\s+.{1,40}\b(running|process|service|port|file|exists?)\b"),
     )
 )
