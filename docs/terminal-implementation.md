@@ -136,6 +136,11 @@ Without `pywinpty`, the terminal shows a clear install hint on Windows.
 - xterm theme from Odysseus CSS variables (`--bg`, `--fg`, `--brand-color`)
 - Web links addon for clickable URLs
 
+### 2026-06-07 — UX: panel visible by default
+- Desktop loads with **Project files** panel open (file tree + terminal shell)
+- Panel stays open when workspace is cleared; shows “Choose folder…” CTA
+- Closing the panel with ✕ sets preference so it stays closed until reopened
+
 ### 2026-06-07 — Phase 4 ✅
 - Multi-tab terminal panel (`createWorkspaceTerminalPanel`) with + / × controls
 - Independent WebSocket session per tab (`session` query param)

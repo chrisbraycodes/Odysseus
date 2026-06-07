@@ -10,6 +10,7 @@ import { createWorkspaceTerminalPanel } from './workspaceTerminal.js';
 
 const API_BASE = window.location.origin;
 const STORAGE_OPEN = 'ws-explorer-open';
+const STORAGE_CLOSED = '0';
 const _FILE_ICON = '<svg class="ws-tree-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>';
 const _DIR_ICON = '<svg class="ws-tree-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>';
 const _DELETE_ICON = '<svg class="ws-tree-delete-icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>';
@@ -362,10 +363,39 @@ function _disposeTerminal() {
   }
 }
 
+function _renderNoWorkspaceState() {
+  const body = _pane?.querySelector('#ws-tree-body');
+  const pathEl = _pane?.querySelector('#ws-tree-path');
+  if (pathEl) pathEl.textContent = '';
+  if (!body) return;
+  body.innerHTML = `
+    <div class="ws-explorer-empty">
+      <div class="ws-explorer-empty-title">No project folder</div>
+      <div class="ws-explorer-empty-hint">Choose a workspace to browse files and use the terminal.</div>
+      <button type="button" class="ws-explorer-pick-btn" id="ws-pick-workspace">Choose folder…</button>
+    </div>`;
+  body.querySelector('#ws-pick-workspace')?.addEventListener('click', () => openWorkspaceBrowser());
+}
+
+function _renderTerminalPlaceholder() {
+  const mount = _pane?.querySelector('#ws-terminal-mount');
+  if (!mount) return;
+  mount.innerHTML = `
+    <div class="ws-terminal-idle">
+      <div class="ws-terminal-idle-title">Terminal</div>
+      <div class="ws-terminal-idle-hint">Pick a workspace folder above to start a shell in that directory.</div>
+    </div>`;
+}
+
 function _mountTerminal() {
   _disposeTerminal();
   const mount = _pane?.querySelector('#ws-terminal-mount');
-  if (!mount || !_workspace) return;
+  if (!mount) return;
+  if (!_workspace) {
+    _renderTerminalPlaceholder();
+    return;
+  }
+  mount.innerHTML = '';
   _terminal = createWorkspaceTerminalPanel(mount, { workspace: _workspace });
 }
 
@@ -385,44 +415,74 @@ function _mountPane() {
   return true;
 }
 
-export async function openPanel() {
-  const ws = getWorkspace();
-  if (!ws) {
-    openWorkspaceBrowser();
-    if (uiModule.showToast) uiModule.showToast('Select a workspace folder first');
-    return;
-  }
-  let resolved = ws;
+function _isMobileLayout() {
   try {
-    const v = await validateWorkspace(ws);
-    if (!v.valid || !v.path) {
-      openWorkspaceBrowser();
-      if (uiModule.showToast) uiModule.showToast('Workspace folder not found — pick again');
-      return;
-    }
-    resolved = v.path;
-    if (resolved !== ws) setWorkspace(resolved);
+    return window.matchMedia('(max-width: 768px)').matches;
   } catch (_) {
-    if (uiModule.showError) uiModule.showError('Could not verify workspace');
-    return;
+    return false;
   }
-  if (_isOpen && _workspace === resolved) return;
+}
 
-  _workspace = resolved;
-  _treePath = '';
-  _expanded = new Set(['']);
+async function _resolveWorkspacePath(ws) {
+  const v = await validateWorkspace(ws);
+  if (!v.valid || !v.path) return null;
+  if (v.path !== ws) setWorkspace(v.path);
+  return v.path;
+}
+
+export async function openPanel({ promptWorkspace = false } = {}) {
+  const ws = getWorkspace();
 
   if (!_mountPane()) return;
 
   document.body.classList.add('ws-explorer-view');
   _isOpen = true;
   Storage.set(STORAGE_OPEN, '1');
-  _syncWorkspaceLabel();
-  _mountTerminal();
 
   const overflow = document.getElementById('overflow-ws-files-btn');
   if (overflow) overflow.classList.add('active');
 
+  if (!ws) {
+    _workspace = '';
+    _treePath = '';
+    _expanded = new Set(['']);
+    _syncWorkspaceLabel();
+    _renderNoWorkspaceState();
+    _mountTerminal();
+    if (promptWorkspace) {
+      openWorkspaceBrowser();
+      if (uiModule.showToast) uiModule.showToast('Select a workspace folder');
+    }
+    return;
+  }
+
+  let resolved = ws;
+  try {
+    const path = await _resolveWorkspacePath(ws);
+    if (!path) {
+      _workspace = '';
+      _syncWorkspaceLabel();
+      _renderNoWorkspaceState();
+      _mountTerminal();
+      if (promptWorkspace) {
+        openWorkspaceBrowser();
+        if (uiModule.showToast) uiModule.showToast('Workspace folder not found — pick again');
+      }
+      return;
+    }
+    resolved = path;
+  } catch (_) {
+    if (uiModule.showError) uiModule.showError('Could not verify workspace');
+    return;
+  }
+
+  if (_isOpen && _workspace === resolved) return;
+
+  _workspace = resolved;
+  _treePath = '';
+  _expanded = new Set(['']);
+  _syncWorkspaceLabel();
+  _mountTerminal();
   _loadTree('');
 }
 
@@ -434,7 +494,7 @@ export function closePanel() {
   _pane?.remove();
   _pane = null;
   _isOpen = false;
-  Storage.remove(STORAGE_OPEN);
+  Storage.set(STORAGE_OPEN, STORAGE_CLOSED);
   const overflow = document.getElementById('overflow-ws-files-btn');
   if (overflow) overflow.classList.remove('active');
 }
@@ -447,13 +507,17 @@ export function togglePanel() {
 function _onWorkspaceChanged(e) {
   const path = e.detail?.path || '';
   if (!path) {
-    if (_isOpen) closePanel();
     _workspace = '';
     _docMod()?.clearWorkspaceFiles?.();
+    if (_isOpen) {
+      _syncWorkspaceLabel();
+      _renderNoWorkspaceState();
+      _mountTerminal();
+    }
     return;
   }
   if (!_isOpen) {
-    _workspace = path;
+    openPanel().catch(() => {});
     return;
   }
   _workspace = path;
@@ -461,7 +525,7 @@ function _onWorkspaceChanged(e) {
   _expanded = new Set(['']);
   _docMod()?.clearWorkspaceFiles?.();
   _syncWorkspaceLabel();
-  _reconnectTerminal();
+  _mountTerminal();
   _loadTree('');
 }
 
@@ -478,7 +542,11 @@ export function initWorkspaceExplorer() {
   const btn = document.getElementById('overflow-ws-files-btn');
   if (btn) btn.addEventListener('click', togglePanel);
 
-  if (getWorkspace() && Storage.get(STORAGE_OPEN, '') === '1') {
+  // Desktop: project files + terminal visible by default (IDE layout).
+  // Mobile: stay chat-first unless the user explicitly reopened the panel.
+  const stored = Storage.get(STORAGE_OPEN, '');
+  const shouldOpen = !_isMobileLayout() && stored !== STORAGE_CLOSED;
+  if (shouldOpen || (getWorkspace() && stored === '1')) {
     openPanel().catch(() => {});
   }
 }
