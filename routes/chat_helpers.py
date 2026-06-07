@@ -357,7 +357,7 @@ def resolve_session_auth(sess, session_id: str, owner: Optional[str] = None):
                 if not _session_url_matches_endpoint(target_url, ep.base_url or ""):
                     continue
                 if not ep.api_key:
-                    return
+                    continue
                 base = normalize_base(ep.base_url or "")
                 sess.headers = build_headers(ep.api_key, base)
                 update_q = db.query(DBSession).filter(DBSession.id == session_id)

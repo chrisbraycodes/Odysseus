@@ -1554,6 +1554,12 @@ async def stream_llm(url: str, model: str, messages: List[Dict], temperature: fl
                         if data.strip():
                             if data.startswith("{"):
                                 j = json.loads(data)
+                                if j.get("error"):
+                                    err = j["error"]
+                                    msg = (err.get("message") if isinstance(err, dict) else str(err)) or "Upstream error"
+                                    status = err.get("http_status_code", 422) if isinstance(err, dict) else 422
+                                    yield f'event: error\ndata: {json.dumps({"status": status, "text": msg})}\n\n'
+                                    return
                                 chunk_model = j.get("model")
                                 if isinstance(chunk_model, str) and chunk_model.strip():
                                     _actual_model = chunk_model.strip()
