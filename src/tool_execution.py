@@ -767,15 +767,25 @@ async def _direct_fallback(
         "LINES": "40",
         "HOME": _AGENT_WORKDIR,
     }
+    from src.terminal_manager import _npm_cache_dir
+    _npm_cache = _npm_cache_dir()
+    try:
+        os.makedirs(_npm_cache, exist_ok=True)
+    except OSError:
+        pass
+    _subproc_env["NPM_CONFIG_CACHE"] = _npm_cache
+    _subproc_env["npm_config_cache"] = _npm_cache
 
     try:
         if tool == "bash":
+            from src.plan_execution import resolve_scaffold_cwd
+            cwd = resolve_scaffold_cwd(workspace, workspace or _default_agent_cwd())
             proc = await asyncio.create_subprocess_shell(
                 content,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 env=_subproc_env,
-                cwd=workspace or _default_agent_cwd(),
+                cwd=cwd,
             )
             stdout, stderr, rc, timed_out = await _run_subprocess_streaming(
                 proc,
@@ -1378,6 +1388,13 @@ async def execute_tool_block(
         if not plan:
             return "update_plan: invalid", {
                 "error": "update_plan needs a non-empty `plan` (the full updated checklist as markdown).",
+                "exit_code": 1,
+            }
+        from src.plan_execution import verify_plan_checkmarks
+        ok, err = verify_plan_checkmarks(plan, workspace)
+        if not ok:
+            return "update_plan: rejected", {
+                "error": err,
                 "exit_code": 1,
             }
         plan = plan[:8192]

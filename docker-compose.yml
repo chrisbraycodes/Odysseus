@@ -51,6 +51,8 @@ services:
       - ./src/action_intents.py:/app/src/action_intents.py:ro
       - ./src/workspace_dev.py:/app/src/workspace_dev.py:ro
       - ./src/shell_orchestration.py:/app/src/shell_orchestration.py:ro
+      - ./src/plan_execution.py:/app/src/plan_execution.py:ro
+      - ./src/tool_parsing.py:/app/src/tool_parsing.py:ro
       - ./docker/entrypoint.sh:/usr/local/bin/entrypoint.sh:ro
     extra_hosts:
       # Lets the container reach local services on the Docker host, including

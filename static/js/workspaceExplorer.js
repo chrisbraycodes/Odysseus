@@ -549,6 +549,7 @@ function _ensureWorkbenchColumn() {
     _terminalDock.innerHTML = `
       <div class="ws-terminal-dock-header">
         <span class="ws-terminal-dock-title">Terminal</span>
+        <span class="ws-terminal-dock-hint" title="Interactive shell for you (not the agent). Select text to copy; Ctrl+Shift+C or Ctrl+C with selection. Paste: Ctrl+Shift+V or Ctrl+V.">Manual shell · Copy/Paste: Ctrl+C / Ctrl+V</span>
       </div>
       <div class="ws-terminal-mount" id="ws-terminal-mount"></div>`;
     _workbenchCol.appendChild(_terminalDock);

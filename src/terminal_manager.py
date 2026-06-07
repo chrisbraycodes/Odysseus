@@ -79,11 +79,31 @@ def _shell_argv() -> list[str]:
     return [shell, "-l"]
 
 
+def _npm_cache_dir() -> str:
+    """Writable npm cache — data/.npm in Docker, else ~/.npm."""
+    override = (os.environ.get("NPM_CONFIG_CACHE") or "").strip()
+    if override:
+        return override
+    data_npm = os.path.realpath(
+        os.path.join(os.path.dirname(__file__), "..", "data", ".npm")
+    )
+    if os.path.isdir(os.path.dirname(data_npm)):
+        return data_npm
+    return os.path.expanduser("~/.npm")
+
+
 def _shell_env(cwd: str) -> dict[str, str]:
     env = os.environ.copy()
     env["TERM"] = "xterm-256color"
     env["COLORTERM"] = "truecolor"
     env["PWD"] = cwd
+    npm_cache = _npm_cache_dir()
+    try:
+        os.makedirs(npm_cache, exist_ok=True)
+    except OSError:
+        pass
+    env["NPM_CONFIG_CACHE"] = npm_cache
+    env["npm_config_cache"] = npm_cache
     return env
 
 

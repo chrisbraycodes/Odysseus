@@ -15,6 +15,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from src.agent_tools import ToolBlock
 from src.direct_shell import is_direct_shell_command
+from src.plan_execution import extract_next_plan_shell_command
 
 # Imperative shell verbs we can run without model cooperation.
 _AUTO_SHELL_RE = re.compile(
@@ -135,6 +136,10 @@ def detect_auto_shell_command(
     cmd = extract_shell_command(user_msg)
     if cmd:
         return cmd
+    if approved_plan and approved_plan.strip():
+        plan_cmd = extract_next_plan_shell_command(approved_plan)
+        if plan_cmd:
+            return plan_cmd
     # Plan-driven: next unchecked npm start when user message is empty/generic.
     if approved_plan and not user_msg.strip():
         if _PLAN_NPM_START_RE.search(approved_plan):
@@ -142,21 +147,19 @@ def detect_auto_shell_command(
     return None
 
 
-async def run_auto_shell_if_needed(
+async def run_auto_shell_for_command(
     *,
-    user_msg: str,
+    command: str,
     workspace: Optional[str],
     approved_plan: str = "",
     session_id: Optional[str],
     owner: Optional[str],
+    user_msg: str = "",
 ) -> Optional[AutoShellResult]:
-    """Execute a direct shell command without waiting for the model."""
-    if not session_id:
+    """Execute a known shell command without waiting for the model."""
+    if not session_id or not (command or "").strip():
         return None
-    cmd = detect_auto_shell_command(user_msg, approved_plan)
-    if not cmd:
-        return None
-
+    cmd = command.strip()
     effective_ws = resolve_effective_workspace(workspace, user_msg, approved_plan)
 
     from src.tool_execution import execute_tool_block
@@ -194,9 +197,47 @@ async def run_auto_shell_if_needed(
         desc=f"bash (auto): {desc}",
         result=result,
         workspace=effective_ws,
-        skip_llm=True,
+        skip_llm=False,
         assistant_message=assistant,
     )
+
+
+async def run_auto_shell_if_needed(
+    *,
+    user_msg: str,
+    workspace: Optional[str],
+    approved_plan: str = "",
+    session_id: Optional[str],
+    owner: Optional[str],
+) -> Optional[AutoShellResult]:
+    """Execute a direct shell command without waiting for the model."""
+    if not session_id:
+        return None
+    cmd = detect_auto_shell_command(user_msg, approved_plan)
+    if not cmd:
+        return None
+
+    result = await run_auto_shell_for_command(
+        command=cmd,
+        workspace=workspace,
+        approved_plan=approved_plan,
+        session_id=session_id,
+        owner=owner,
+        user_msg=user_msg,
+    )
+    if not result:
+        return None
+    # Direct one-line user commands (npm start, npx …) skip the LLM entirely.
+    if extract_shell_command(user_msg):
+        result.skip_llm = True
+    # Plan-driven scaffolds/installs run in background — wait for bg followup.
+    elif result.result.get("bg_job_id"):
+        result.skip_llm = True
+    elif cmd.strip().lower() == "pwd":
+        result.skip_llm = True
+    else:
+        result.skip_llm = False
+    return result
 
 
 def format_tool_sse(

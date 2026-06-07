@@ -21,6 +21,11 @@ class ShellOrchestrationTests(unittest.TestCase):
     def test_detect_pwd(self):
         self.assertEqual(detect_auto_shell_command("pwd"), "pwd")
 
+    def test_detect_plan_npx_step(self):
+        plan = "- [ ] Run `npx create-react-app batman`\n- [ ] cd batman"
+        cmd = detect_auto_shell_command("execute the approved plan", plan)
+        self.assertEqual(cmd, "npx create-react-app batman")
+
     def test_resolve_batman_subproject(self):
         with tempfile.TemporaryDirectory() as parent:
             batman = os.path.join(parent, "batman")

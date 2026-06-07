@@ -66,6 +66,86 @@ function _themeFromCss() {
   };
 }
 
+async function _writeClipboard(text) {
+  if (!text) return false;
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+  } catch (_) { /* fallback below */ }
+  const ta = document.createElement('textarea');
+  ta.value = text;
+  ta.setAttribute('readonly', '');
+  ta.style.position = 'fixed';
+  ta.style.left = '-9999px';
+  document.body.appendChild(ta);
+  ta.select();
+  try {
+    return document.execCommand('copy');
+  } catch (_) {
+    return false;
+  } finally {
+    ta.remove();
+  }
+}
+
+async function _readClipboard() {
+  try {
+    if (navigator.clipboard?.readText) {
+      return await navigator.clipboard.readText();
+    }
+  } catch (_) { /* ignore */ }
+  return '';
+}
+
+function _attachClipboardHandlers(term, termHost) {
+  term.attachCustomKeyEventHandler((ev) => {
+    if (ev.type !== 'keydown') return true;
+    const mod = ev.ctrlKey || ev.metaKey;
+    const key = (ev.key || '').toLowerCase();
+
+    // Copy selection: Ctrl+Shift+C, or Ctrl/Cmd+C when text is selected.
+    if (mod && key === 'c') {
+      if (ev.shiftKey || term.hasSelection()) {
+        const sel = term.getSelection();
+        if (sel) {
+          ev.preventDefault();
+          _writeClipboard(sel);
+          return false;
+        }
+      }
+      return true;
+    }
+
+    // Paste: Ctrl+Shift+V, Ctrl/Cmd+V, or Shift+Insert.
+    const isPaste =
+      (mod && key === 'v') ||
+      (ev.shiftKey && key === 'insert');
+    if (isPaste) {
+      ev.preventDefault();
+      _readClipboard().then((text) => {
+        if (text) term.paste(text);
+      });
+      return false;
+    }
+
+    // Select all: Ctrl+Shift+A (common terminal shortcut).
+    if (mod && ev.shiftKey && key === 'a') {
+      ev.preventDefault();
+      term.selectAll();
+      return false;
+    }
+
+    return true;
+  });
+
+  termHost.addEventListener('mousedown', () => {
+    window.setTimeout(() => term.focus(), 0);
+  });
+  termHost.addEventListener('dblclick', () => term.focus());
+}
+
 /**
  * @param {HTMLElement} mountEl — container for xterm + status bar
  * @param {{ workspace: string, onStatus?: (msg: string, phase: string) => void }} opts
@@ -90,6 +170,26 @@ export function createWorkspaceTerminal(mountEl, opts) {
 
   const toolbar = document.createElement('div');
   toolbar.className = 'ws-terminal-toolbar';
+
+  const clipGroup = document.createElement('div');
+  clipGroup.className = 'ws-terminal-clip-actions';
+
+  const copyBtn = document.createElement('button');
+  copyBtn.type = 'button';
+  copyBtn.className = 'ws-terminal-clip-btn';
+  copyBtn.textContent = 'Copy';
+  copyBtn.title = 'Copy selection (Ctrl+Shift+C, or Ctrl+C when selected)';
+
+  const pasteBtn = document.createElement('button');
+  pasteBtn.type = 'button';
+  pasteBtn.className = 'ws-terminal-clip-btn';
+  pasteBtn.textContent = 'Paste';
+  pasteBtn.title = 'Paste from clipboard (Ctrl+Shift+V or Ctrl+V)';
+
+  clipGroup.appendChild(copyBtn);
+  clipGroup.appendChild(pasteBtn);
+  toolbar.appendChild(clipGroup);
+
   const reconnectBtn = document.createElement('button');
   reconnectBtn.type = 'button';
   reconnectBtn.className = 'ws-terminal-reconnect';
@@ -133,7 +233,24 @@ export function createWorkspaceTerminal(mountEl, opts) {
     term.loadAddon(fitAddon);
     term.loadAddon(new WebLinksAddon());
     term.open(termHost);
+    _attachClipboardHandlers(term, termHost);
+    copyBtn.addEventListener('click', () => {
+      const sel = term.getSelection();
+      if (sel) {
+        _writeClipboard(sel);
+        return;
+      }
+      term.selectAll();
+      _writeClipboard(term.getSelection());
+    });
+    pasteBtn.addEventListener('click', () => {
+      term.focus();
+      _readClipboard().then((text) => {
+        if (text) term.paste(text);
+      });
+    });
     fitAddon.fit();
+    term.focus();
     term.onData((data) => {
       if (socket && socket.readyState === WebSocket.OPEN) {
         socket.send(new TextEncoder().encode(data));
@@ -188,6 +305,7 @@ export function createWorkspaceTerminal(mountEl, opts) {
             if (msg.session) sessionId = msg.session;
             if (msg.phase === 'ready') {
               setStatus(msg.message || 'Connected', 'ready');
+              term.focus();
               window.setTimeout(() => {
                 if (statusEl.dataset.phase === 'ready') {
                   statusEl.style.display = 'none';
@@ -248,7 +366,7 @@ export function createWorkspaceTerminal(mountEl, opts) {
     reconnectBtn.style.display = '';
   });
 
-  return { connect, dispose, setStatus };
+  return { connect, dispose, setStatus, focus: () => term?.focus() };
 }
 
 /**

@@ -90,6 +90,26 @@ export VLLM_USE_FLASHINFER_SAMPLER="${VLLM_USE_FLASHINFER_SAMPLER:-0}"
 # vLLM and helper scripts land here because /app is the non-root user's HOME.
 export PATH="/app/.local/bin:$PATH"
 
+# npm/npx cache: app user HOME is /app; bootstrap as root (pip install websockets,
+# etc.) can leave root-owned /app/.npm and break the browser terminal + agent bash.
+export NPM_CONFIG_CACHE="${NPM_CONFIG_CACHE:-/app/data/.npm}"
+mkdir -p "$NPM_CONFIG_CACHE" /app/data/.npm 2>/dev/null || true
+chown "$PUID:$PGID" "$NPM_CONFIG_CACHE" 2>/dev/null || true
+if [ -d /app/.npm ]; then
+    chown -R "$PUID:$PGID" /app/.npm 2>/dev/null || true
+fi
+# Shallow repair when an old root-owned npx cache lives under data/.npm
+if [ -d /app/data/.npm ]; then
+    _chown_if_needed /app/data/.npm 3
+fi
+
+# uvicorn WebSocket upgrades (workspace terminal PTY) require websockets or
+# wsproto. Older images built before websockets landed in requirements.txt
+# log "No supported WebSocket library" and return 404 on /api/terminal/ws.
+if ! python3 -c "import websockets" >/dev/null 2>&1; then
+    pip install --no-cache-dir 'websockets>=12.0' >/dev/null 2>&1 || true
+fi
+
 # Run first-time setup as the app user so data/ files get the right ownership.
 # setup.py is idempotent — skips auth.json / .env if they already exist.
 # || true so a setup failure never prevents the container from starting.

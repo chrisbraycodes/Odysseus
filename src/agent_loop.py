@@ -1875,8 +1875,9 @@ async def stream_agent_loop(
     # so the user can resume instead of the turn silently stalling.
     _exhausted_rounds = False
 
-    # Auto-orchestration: run direct shell commands (npm start, pwd, …) without
-    # waiting for a weak model to emit a ```bash block.
+    # Auto-orchestration: run direct shell commands (npm start, pwd, …) and the
+    # next unchecked shell step from an approved plan without waiting for a
+    # weak model to emit a ```bash block.
     if session_id and "bash" not in (disabled_tools or set()) and not plan_mode:
         try:
             from src.direct_shell import last_user_message
@@ -1919,6 +1920,14 @@ async def stream_agent_loop(
                     yield f"data: {json.dumps({'type': 'metrics', 'data': metrics})}\n\n"
                     yield "data: [DONE]\n\n"
                     return
+                messages.append({
+                    "role": "system",
+                    "content": (
+                        f"Auto-ran `{_auto.command}` for the active plan step. "
+                        f"Output:\n{_auto.result.get('output') or _auto.result.get('error') or '(no output)'}\n\n"
+                        "Continue with the plan — use ```update_plan``` to tick completed steps."
+                    ),
+                })
         except Exception as _auto_shell_err:
             logger.warning("[auto-shell] skipped: %s", _auto_shell_err)
 
@@ -2226,6 +2235,46 @@ async def stream_agent_loop(
         round_texts.append(cleaned_round)
 
         if not tool_blocks:
+            # ── False completion recovery ───────────────────────────────
+            # Local models often write "Ran `npx …`" with zero tool blocks.
+            # Detect and execute the command instead of accepting the claim.
+            try:
+                from src.plan_execution import detect_false_completion_command
+                from src.shell_orchestration import format_tool_sse, run_auto_shell_for_command
+                _fc_cmd = detect_false_completion_command(cleaned_round, approved_plan or "")
+                if (_fc_cmd and session_id and "bash" not in (disabled_tools or set())):
+                    _fc = await run_auto_shell_for_command(
+                        command=_fc_cmd,
+                        workspace=workspace,
+                        approved_plan=approved_plan or "",
+                        session_id=session_id,
+                        owner=owner,
+                    )
+                    if _fc:
+                        logger.info("[agent] false-completion recovery: auto-ran %r", _fc_cmd)
+                        if _fc.workspace:
+                            workspace = _fc.workspace
+                        _start_sse, _out_sse, _te = format_tool_sse(
+                            _fc.command, _fc.desc, _fc.result, round_num=round_num,
+                        )
+                        yield _start_sse
+                        yield _out_sse
+                        tool_events.append(_te)
+                        if _fc.result.get("bg_job_id"):
+                            break
+                        messages.append({
+                            "role": "system",
+                            "content": (
+                                f"You claimed you ran `{_fc_cmd}` but emitted no ```bash``` block. "
+                                f"Odysseus executed it:\n"
+                                f"{_fc.result.get('output') or _fc.result.get('error') or '(no output)'}\n\n"
+                                "Only mark plan steps `- [x]` after tool output confirms success."
+                            ),
+                        })
+                        continue
+            except Exception as _fc_err:
+                logger.warning("[agent] false-completion recovery failed: %s", _fc_err)
+
             # ── Completion verifier (mechanism 3a) ────────────────────
             # The model is finishing. If this was an effectful agentic turn,
             # have a fresh-context verifier independently check the work
