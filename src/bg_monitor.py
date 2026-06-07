@@ -80,10 +80,12 @@ async def _run_followup(rec: dict) -> bool:
     sm = get_session_manager()
     if not sm:
         return False  # not ready yet — retry
-    sess = sm.get_session(rec["session_id"])
-    if not sess:
-        # Session was deleted — nothing to continue. Consider it handled so we
-        # don't retry forever.
+    try:
+        sess = sm.get_session(rec["session_id"])
+    except KeyError:
+        # Session was deleted (or test job pointed at a fake id). Mark handled —
+        # get_session raises instead of returning None, so without this we retry
+        # forever and spam the logs every POLL_INTERVAL_S.
         logger.info("bg-followup: session %s gone for job %s — skipping", rec.get("session_id"), rec.get("id"))
         return True
 

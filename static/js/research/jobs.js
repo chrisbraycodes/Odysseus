@@ -27,28 +27,101 @@ function _markDismissed(ids) {
 }
 
 let _activePollInterval = null;
+let _reconnectInFlight = false;
+let _libraryLoaded = false;
+let _lastLibraryFetch = 0;
+const _LIBRARY_REFRESH_MS = 5 * 60 * 1000;
+const _ACTIVE_POLL_RUNNING_MS = 12000;
+const _ACTIVE_POLL_IDLE_MS = 30000;
+
+function _hasRunningJobs() {
+  return _jobs.some(j => j.status === 'running');
+}
+
+function _activePollDelay() {
+  if (typeof document !== 'undefined' && document.hidden) return null;
+  return _hasRunningJobs() ? _ACTIVE_POLL_RUNNING_MS : _ACTIVE_POLL_IDLE_MS;
+}
+
+function _scheduleActivePoll() {
+  if (_activePollInterval) {
+    clearInterval(_activePollInterval);
+    _activePollInterval = null;
+  }
+  const delay = _activePollDelay();
+  if (!delay) return;
+  _activePollInterval = setInterval(() => { _pollActiveSessions(); }, delay);
+}
+
+function _onVisibilityForPoll() {
+  if (document.hidden) {
+    if (_activePollInterval) {
+      clearInterval(_activePollInterval);
+      _activePollInterval = null;
+    }
+    return;
+  }
+  _pollActiveSessions();
+  _scheduleActivePoll();
+}
 
 export function init(apiBase) {
   _apiBase = apiBase;
-  _reconnectActive();
+  _reconnectActive({ includeLibrary: true });
   // Poll for active sessions periodically so research started elsewhere
   // (e.g. by the agent via trigger_research) gets adopted into the
   // sidebar — _reconnectActive only ran once at load before, so
   // agent-started jobs never appeared until a page reload.
-  if (_activePollInterval) clearInterval(_activePollInterval);
-  _activePollInterval = setInterval(() => { _reconnectActive(); }, 12000);
+  if (!_visibilityBound) {
+    document.addEventListener('visibilitychange', _onVisibilityForPoll);
+    _visibilityBound = true;
+  }
+  _scheduleActivePoll();
 }
+let _visibilityBound = false;
 
 // Allow an immediate adopt when the chat stream signals a new research
 // session (research_started ui_event) — faster than the 12s poll.
 export function adoptSession(sessionId) {
   if (!sessionId || _jobs.some(j => j.id === sessionId)) return;
-  _reconnectActive();
+  _reconnectActive({ includeLibrary: false });
 }
 
-async function _reconnectActive() {
+async function _pollActiveSessions() {
+  await _reconnectActive({ includeLibrary: false });
+  _scheduleActivePoll();
+}
+
+async function _loadLibraryJobs() {
+  const libRes = await fetch(`${_apiBase}/api/research/library?sort=recent&limit=20`, { credentials: 'same-origin' });
+  if (!libRes.ok) return;
+  const libData = await libRes.json();
+  const dismissed = _loadDismissed();
+  for (const item of (libData.research || [])) {
+    if (item.status !== 'done') continue;
+    if (dismissed.has(item.id)) continue;
+    if (_jobs.some(j => j.id === item.id)) continue;
+    const elapsed = item.duration ? _parseDuration(item.duration) : 0;
+    _jobs.push({
+      id: item.id, query: item.query, status: 'done',
+      progress: {}, startedAt: (item.started_at || 0) * 1000,
+      elapsed, result: null, sources: null, findings: null,
+      sourceCount: item.source_count || 0,
+      category: item.category || '',
+      errorMsg: null, avgDuration: null, modelName: null,
+      settings: { max_rounds: item.rounds || 8 },
+      _es: null, _timerInterval: null, _fromLibrary: true,
+    });
+  }
+  _libraryLoaded = true;
+  _lastLibraryFetch = Date.now();
+}
+
+async function _reconnectActive({ includeLibrary = false } = {}) {
+  if (_reconnectInFlight) return;
+  if (typeof document !== 'undefined' && document.hidden) return;
+  _reconnectInFlight = true;
   try {
-    // Reconnect to running tasks
     const res = await fetch(`${_apiBase}/api/research/active`, { credentials: 'same-origin' });
     if (res.ok) {
       const data = await res.json();
@@ -68,31 +141,15 @@ async function _reconnectActive() {
       }
     }
 
-    // Load recent completed research from disk
-    const libRes = await fetch(`${_apiBase}/api/research/library?sort=recent&limit=20`, { credentials: 'same-origin' });
-    if (libRes.ok) {
-      const libData = await libRes.json();
-      const dismissed = _loadDismissed();
-      for (const item of (libData.research || [])) {
-        if (item.status !== 'done') continue;
-        if (dismissed.has(item.id)) continue;
-        if (_jobs.some(j => j.id === item.id)) continue;
-        const elapsed = item.duration ? _parseDuration(item.duration) : 0;
-        _jobs.push({
-          id: item.id, query: item.query, status: 'done',
-          progress: {}, startedAt: (item.started_at || 0) * 1000,
-          elapsed, result: null, sources: null, findings: null,
-          sourceCount: item.source_count || 0,
-          category: item.category || '',
-          errorMsg: null, avgDuration: null, modelName: null,
-          settings: { max_rounds: item.rounds || 8 },
-          _es: null, _timerInterval: null, _fromLibrary: true,
-        });
-      }
+    const staleLibrary = Date.now() - _lastLibraryFetch > _LIBRARY_REFRESH_MS;
+    if (includeLibrary || !_libraryLoaded || staleLibrary) {
+      await _loadLibraryJobs();
     }
 
     _notify();
-  } catch {}
+  } catch {} finally {
+    _reconnectInFlight = false;
+  }
 }
 
 function _parseDuration(s) {
@@ -305,7 +362,9 @@ function _finishJob(job, status) {
   if (job._es) { job._es.close(); job._es = null; }
   if (job._timerInterval) { clearInterval(job._timerInterval); job._timerInterval = null; }
   job.elapsed = Date.now() - (job.startedAt || Date.now());
+  _scheduleActivePoll();
   if (status === 'done') {
+    _loadLibraryJobs().then(() => _notify()).catch(() => {});
     if ('Notification' in window && Notification.permission === 'granted') {
       try { new Notification('Research Complete', { body: job.query.slice(0, 80) }); } catch {}
     }

@@ -28,6 +28,22 @@ services:
       - ./src/tool_schemas.py:/app/src/tool_schemas.py:ro
       - ./src/agent_loop.py:/app/src/agent_loop.py:ro
       - ./routes/workspace_routes.py:/app/routes/workspace_routes.py:ro
+      - ./static/js/workspaceExplorer.js:/app/static/js/workspaceExplorer.js:ro
+      - ./static/js/workspaceTerminal.js:/app/static/js/workspaceTerminal.js:ro
+      - ./static/lib/xterm:/app/static/lib/xterm:ro
+      - ./routes/terminal_routes.py:/app/routes/terminal_routes.py:ro
+      - ./src/terminal_manager.py:/app/src/terminal_manager.py:ro
+      - ./app.py:/app/app.py:ro
+      - ./static/js/document.js:/app/static/js/document.js:ro
+      - ./static/js/workspace.js:/app/static/js/workspace.js:ro
+      - ./static/js/research/jobs.js:/app/static/js/research/jobs.js:ro
+      - ./static/js/emailInbox.js:/app/static/js/emailInbox.js:ro
+      - ./static/js/tasks.js:/app/static/js/tasks.js:ro
+      - ./static/app.js:/app/static/app.js:ro
+      - ./static/style.css:/app/static/style.css:ro
+      - ./static/index.html:/app/static/index.html:ro
+      - ./routes/chat_routes.py:/app/routes/chat_routes.py:ro
+      - ./src/workspace_path.py:/app/src/workspace_path.py:ro
       - ./src/tool_execution.py:/app/src/tool_execution.py:ro
       - ./src/bg_jobs.py:/app/src/bg_jobs.py:ro
       - ./src/bg_monitor.py:/app/src/bg_monitor.py:ro
@@ -35,6 +51,7 @@ services:
       - ./src/action_intents.py:/app/src/action_intents.py:ro
       - ./src/workspace_dev.py:/app/src/workspace_dev.py:ro
       - ./src/shell_orchestration.py:/app/src/shell_orchestration.py:ro
+      - ./docker/entrypoint.sh:/usr/local/bin/entrypoint.sh:ro
     extra_hosts:
       # Lets the container reach local services on the Docker host, including
       # Ollama at http://host.docker.internal:11434.
@@ -75,6 +92,7 @@ services:
       - WORKSPACE_DEV_BIND=${DEV_BIND:-127.0.0.1}
       - WORKSPACE_DEV_PORT=${WORKSPACE_DEV_PORT:-3000}
       - WORKSPACE_VITE_PORT=${WORKSPACE_VITE_PORT:-5173}
+      - ODYSSEUS_WORKSPACE_ROOT=/workspace
       # PUID / PGID — the user/group the container drops to before
       # running uvicorn (entrypoint also chowns /app/data + /app/logs
       # to match, so bind-mounted files stay editable from the host).

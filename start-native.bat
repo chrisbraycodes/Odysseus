@@ -1,15 +1,15 @@
 @echo off
 setlocal
-title Start Odysseus
+title Start Odysseus (native)
 
 pushd "%~dp0" >nul
 
 echo =========================================
-echo Starting Odysseus (Docker)
+echo Starting Odysseus (native Windows)
 echo =========================================
 echo.
 
-powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0launch-docker.ps1" %*
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0launch-windows.ps1" %*
 set "EXIT_CODE=%ERRORLEVEL%"
 
 if %EXIT_CODE% neq 0 (

@@ -20,6 +20,7 @@ NON_ADMIN_BLOCKED_TOOLS = {
     "grep",
     "glob",
     "ls",
+    "delete_file",
     "search_chats",
     "manage_memory",
     "manage_skills",
@@ -99,7 +100,7 @@ PLAN_MODE_READONLY_TOOLS = {
 # here — read-only tools are covered by the allowlist. Keep in sync when adding
 # new mutating tools.
 _PLAN_MODE_KNOWN_MUTATORS = {
-    "write_file", "create_document", "edit_document", "update_document",
+    "write_file", "delete_file", "create_document", "edit_document", "update_document",
     "suggest_document", "manage_documents", "create_session", "manage_session",
     "send_to_session", "pipeline", "manage_memory", "manage_skills",
     "manage_tasks", "manage_notes", "manage_endpoints", "manage_mcp",

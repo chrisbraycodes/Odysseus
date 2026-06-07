@@ -113,6 +113,256 @@ import * as Modals from './modalManager.js';
   let _lastSessionId = '';          // session context for "+" button
   const docs = new Map();           // docId -> { id, title, language, content, version, sessionId }
 
+  // Workspace file tabs (project explorer — share the doc editor tab bar)
+  /** @type {Map<string, { path: string, content: string, dirty: boolean, workspace: string }>} */
+  const workspaceFiles = new Map();
+  let activeWorkspaceFile = null;   // relative path when a project file tab is active
+  const _WS_FILE_ICON = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="opacity:0.65;flex-shrink:0;"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>';
+
+  function _wsBasename(p) {
+    if (!p) return '';
+    const parts = p.replace(/[\\/]+$/, '').split(/[\\/]/);
+    return parts[parts.length - 1] || p;
+  }
+
+  /** Unique tab label for a new blank document until the user names it. */
+  function _makeDraftTitle() {
+    return `Draft-${Math.random().toString(36).slice(2, 7)}`;
+  }
+
+  function _isPlaceholderTitle(title) {
+    return !title || title === 'Untitled' || /^Draft-[a-z0-9]{4,8}$/i.test(title);
+  }
+
+  function _tabDisplayTitle(doc) {
+    const t = (doc?.title || '').trim();
+    return t || 'Untitled';
+  }
+
+  function _langFromFilePath(p) {
+    const ext = (p.split('.').pop() || '').toLowerCase();
+    const map = {
+      py: 'python', js: 'javascript', mjs: 'javascript', cjs: 'javascript',
+      ts: 'typescript', tsx: 'typescript', jsx: 'javascript',
+      html: 'html', htm: 'html', css: 'css', md: 'markdown', json: 'json',
+      yaml: 'yaml', yml: 'yaml', sh: 'bash', bash: 'bash',
+      sql: 'sql', rs: 'rust', go: 'go', java: 'java', c: 'c', cpp: 'cpp',
+      xml: 'xml', svg: 'svg', toml: 'toml', ini: 'ini', rb: 'ruby', php: 'php',
+      csv: 'csv',
+    };
+    return map[ext] || '';
+  }
+
+  function _syncWorkspaceFileTabsBodyClass() {
+    document.body.classList.toggle('ws-editor-open', workspaceFiles.size > 0);
+  }
+
+  function _dispatchWorkspaceFileTabsChanged() {
+    document.dispatchEvent(new CustomEvent('workspace-file-tabs-changed', {
+      detail: {
+        paths: [...workspaceFiles.keys()],
+        activePath: activeWorkspaceFile,
+      },
+    }));
+  }
+
+  function _flushWorkspaceFileToMap() {
+    if (!activeWorkspaceFile || !workspaceFiles.has(activeWorkspaceFile)) return;
+    const ta = document.getElementById('doc-editor-textarea');
+    if (ta) workspaceFiles.get(activeWorkspaceFile).content = ta.value;
+  }
+
+  function _ensureWorkspaceSaveBtn() {
+    let btn = document.getElementById('doc-ws-save-btn');
+    if (btn) return btn;
+    const footer = document.getElementById('doc-actions-footer');
+    const hdr = document.getElementById('doc-editor-actions');
+    const host = footer || hdr;
+    if (!host) return null;
+    btn = document.createElement('button');
+    btn.id = 'doc-ws-save-btn';
+    btn.type = 'button';
+    btn.className = 'doc-action-icon-btn ws-save-btn';
+    btn.title = 'Save file (Ctrl+S)';
+    btn.textContent = 'Save';
+    btn.style.display = 'none';
+    btn.style.fontWeight = '600';
+    // Version badge and most controls live in the footer after openPanel setup —
+    // never insertBefore a node that isn't a direct child of host.
+    const split = footer?.querySelector('#doc-copy-export-split');
+    if (footer && split) split.before(btn);
+    else host.appendChild(btn);
+    btn.addEventListener('click', () => { saveWorkspaceFile().catch(() => {}); });
+    return btn;
+  }
+
+  function _syncWorkspaceFileEditorUi(ft) {
+    const saveBtn = _ensureWorkspaceSaveBtn();
+    const mdToolbar = document.getElementById('doc-md-toolbar');
+    const emailHdr = document.getElementById('doc-email-header');
+    const langSelect = document.getElementById('doc-language-select');
+    const badge = document.getElementById('doc-version-badge');
+    const diffBtn = document.getElementById('doc-diff-toggle-btn');
+    const textarea = document.getElementById('doc-editor-textarea');
+    const titleInput = document.getElementById('doc-title-input');
+
+    if (titleInput) titleInput.value = ft.path;
+    const wrap = document.getElementById('doc-editor-wrap');
+    if (wrap) wrap.style.display = '';
+    if (textarea) {
+      textarea.value = ft.content || '';
+      textarea.placeholder = '';
+      textarea.disabled = false;
+    }
+    const lang = _langFromFilePath(ft.path);
+    if (langSelect) langSelect.value = lang || '';
+    if (badge) badge.style.display = 'none';
+    if (diffBtn) diffBtn.style.display = 'none';
+    if (emailHdr) emailHdr.style.display = 'none';
+    if (mdToolbar) mdToolbar.style.display = 'none';
+    if (saveBtn) {
+      saveBtn.style.display = '';
+      saveBtn.disabled = !ft.dirty;
+    }
+    document.getElementById('doc-undo-btn')?.style.setProperty('display', 'none');
+    document.getElementById('doc-export-pdf-btn')?.style.setProperty('display', 'none');
+    document.getElementById('doc-pdf-view-btn')?.style.setProperty('display', 'none');
+    document.getElementById('doc-header-preview-btn')?.style.setProperty('display', 'none');
+    exitHtmlPreview();
+    syncHighlighting();
+    requestAnimationFrame(() => {
+      const ta2 = document.getElementById('doc-editor-textarea');
+      const code2 = document.getElementById('doc-editor-code');
+      const pre2 = document.getElementById('doc-editor-highlight');
+      if (ta2 && code2 && pre2) {
+        code2.style.minHeight = ta2.scrollHeight + 'px';
+        pre2.scrollTop = ta2.scrollTop;
+      }
+    });
+  }
+
+  function _restoreDocEditorChrome() {
+    const saveBtn = document.getElementById('doc-ws-save-btn');
+    if (saveBtn) saveBtn.style.display = 'none';
+    document.getElementById('doc-undo-btn')?.style.removeProperty('display');
+    document.getElementById('doc-export-pdf-btn')?.style.removeProperty('display');
+    document.getElementById('doc-pdf-view-btn')?.style.removeProperty('display');
+    document.getElementById('doc-header-preview-btn')?.style.removeProperty('display');
+  }
+
+  function _setWorkspaceFileDirty(path, dirty) {
+    const ft = workspaceFiles.get(path);
+    if (!ft) return;
+    ft.dirty = dirty;
+    if (path === activeWorkspaceFile) {
+      const saveBtn = document.getElementById('doc-ws-save-btn');
+      if (saveBtn) saveBtn.disabled = !dirty;
+    }
+    renderTabs();
+  }
+
+  function switchToWorkspaceFile(path) {
+    if (!workspaceFiles.has(path)) return;
+    _hideLoadingOverlay();
+    if (_diffModeActive) exitDiffMode(true);
+    saveCurrentToMap();
+
+    activeWorkspaceFile = path;
+    _syncWorkspaceFileEditorUi(workspaceFiles.get(path));
+    renderTabs();
+    _dispatchWorkspaceFileTabsChanged();
+  }
+
+  function closeWorkspaceFileTab(path, { force = false } = {}) {
+    const ft = workspaceFiles.get(path);
+    if (!ft) return;
+    if (!force && ft.dirty && !confirm(`Discard unsaved changes in ${_wsBasename(path)}?`)) return;
+
+    workspaceFiles.delete(path);
+    if (activeWorkspaceFile === path) {
+      activeWorkspaceFile = null;
+      _restoreDocEditorChrome();
+      const remaining = [...workspaceFiles.keys()];
+      if (remaining.length) {
+        switchToWorkspaceFile(remaining[remaining.length - 1]);
+      } else {
+        _activateNextEditorTabOrEmpty();
+      }
+    } else {
+      renderTabs();
+    }
+    _syncWorkspaceFileTabsBodyClass();
+    _dispatchWorkspaceFileTabsChanged();
+  }
+
+  export async function saveWorkspaceFile() {
+    if (!activeWorkspaceFile) return;
+    const ft = workspaceFiles.get(activeWorkspaceFile);
+    const ta = document.getElementById('doc-editor-textarea');
+    if (!ft || !ta) return;
+    ft.content = ta.value;
+    const res = await fetch(`${API_BASE}/api/workspace/file`, {
+      method: 'PUT',
+      credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ workspace: ft.workspace, path: ft.path, content: ft.content }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      const msg = typeof err.detail === 'string' ? err.detail : 'Save failed';
+      throw new Error(msg);
+    }
+    _setWorkspaceFileDirty(ft.path, false);
+    if (uiModule?.showToast) uiModule.showToast('Saved');
+  }
+
+  export function openWorkspaceFile({ workspace, path, content }) {
+    if (!path) return;
+    const existing = workspaceFiles.get(path);
+    if (existing) {
+      if (workspace) existing.workspace = workspace;
+      if (content != null) existing.content = content;
+    } else {
+      workspaceFiles.set(path, { path, content: content ?? '', dirty: false, workspace });
+    }
+    _syncWorkspaceFileTabsBodyClass();
+    _ensureDocPaneMounted();
+    switchToWorkspaceFile(path);
+  }
+
+  // Project explorer opens files via event so it never depends on import order.
+  document.addEventListener('open-workspace-file', (e) => {
+    const d = e.detail || {};
+    if (d.path) openWorkspaceFile(d);
+  });
+
+  export function clearWorkspaceFiles() {
+    workspaceFiles.clear();
+    activeWorkspaceFile = null;
+    _restoreDocEditorChrome();
+    _syncWorkspaceFileTabsBodyClass();
+    renderTabs();
+    _dispatchWorkspaceFileTabsChanged();
+  }
+
+  export function hasDirtyWorkspaceFiles() {
+    for (const ft of workspaceFiles.values()) if (ft.dirty) return true;
+    return false;
+  }
+
+  export function getWorkspaceFileState() {
+    return {
+      paths: [...workspaceFiles.keys()],
+      activePath: activeWorkspaceFile,
+      openPaths: new Set(workspaceFiles.keys()),
+    };
+  }
+
+  /** Close a workspace file tab after it was deleted on disk (skip dirty confirm). */
+  export function removeWorkspaceFileTab(path) {
+    closeWorkspaceFileTab(path, { force: true });
+  }
+
   const _docOpenKey = (sessionId) => 'odysseus-doc-open-' + sessionId;
   const _docMinimizedKey = (sessionId) => 'odysseus-doc-minimized-' + sessionId;
 
@@ -267,12 +517,22 @@ import * as Modals from './modalManager.js';
     html += '<div class="doc-tab-scroll" id="doc-tab-scroll">';
     const curSession = sessionModule?.getCurrentSessionId() || '';
     let _anyTab = false;
+    for (const [path, ft] of workspaceFiles) {
+      _anyTab = true;
+      const isActive = path === activeWorkspaceFile;
+      const dirty = ft.dirty ? '<span class="ws-modified-dot">●</span>' : '';
+      html += `<div class="doc-tab doc-tab-file${isActive ? ' active' : ''}" data-ws-file="${_esc(path)}" title="${_esc(path)}" draggable="false">
+        <span class="doc-tab-lang">${_WS_FILE_ICON}</span>
+        <span class="doc-tab-title">${_esc(_wsBasename(path))}</span>${dirty}
+        <button class="doc-tab-close" data-ws-file="${_esc(path)}" title="Close file">&times;</button>
+      </div>`;
+    }
     for (const [id, doc] of docs) {
       // Only show tabs for the current session
       if (doc.sessionId && curSession && doc.sessionId !== curSession) continue;
       _anyTab = true;
-      const isActive = id === activeDocId;
-      const title = doc.title || 'Untitled';
+      const isActive = !activeWorkspaceFile && id === activeDocId;
+      const title = _tabDisplayTitle(doc);
       const shortTitle = title.length > 24 ? title.slice(0, 22) + '...' : title;
       const menuBtn = `<button class="doc-tab-menu-btn" data-doc-id="${id}" title="Document actions"><svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="2.5"/><circle cx="12" cy="12" r="2.5"/><circle cx="12" cy="19" r="2.5"/></svg></button>`;
       const ver = doc.version || doc.version_count || 1;
@@ -290,7 +550,7 @@ import * as Modals from './modalManager.js';
     }
     // Empty state (panel open, no doc yet): show a ghost "Untitled" tab so it's
     // obvious you're in a fresh document rather than staring at a blank pane.
-    if (!_anyTab && isOpen && !activeDocId) {
+    if (!_anyTab && isOpen && !activeDocId && !activeWorkspaceFile) {
       html += `<div class="doc-tab active doc-tab-ghost" title="New document — start typing"><span class="doc-tab-title">Untitled</span></div>`;
     }
     html += `<button class="doc-tab-new" id="doc-tab-new-btn" title="New document"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg></button>`;
@@ -337,6 +597,12 @@ import * as Modals from './modalManager.js';
         // Check if click was on or inside the close/play button
         if (e.target.closest('.doc-tab-close') || e.target.closest('.doc-tab-play') || e.target.closest('.doc-tab-menu-btn') || e.target.closest('.doc-tab-version')) return;
         if (_isEditingTabTitle) return;
+        const wsPath = tab.dataset.wsFile;
+        if (wsPath) {
+          switchToWorkspaceFile(wsPath);
+          _scrollTabIntoView(tab);
+          return;
+        }
         // If clicking the title span, delay to allow dblclick
         if (e.target.classList.contains('doc-tab-title')) {
           clearTimeout(_tabClickTimer);
@@ -389,6 +655,11 @@ import * as Modals from './modalManager.js';
       const closeBtn = e.target.closest('.doc-tab-close');
       if (!closeBtn) return;
       e.stopPropagation();
+      const wsPath = closeBtn.dataset.wsFile;
+      if (wsPath) {
+        closeWorkspaceFileTab(wsPath);
+        return;
+      }
       const docId = closeBtn.dataset.docId;
       if (docId) closeTab(docId);
     };
@@ -401,6 +672,7 @@ import * as Modals from './modalManager.js';
     const newBtn = document.getElementById('doc-tab-new-btn');
     if (newBtn) {
       newBtn.addEventListener('click', async () => {
+        saveCurrentToMap();
         let sessionId = docs.get(activeDocId)?.sessionId
           || _lastSessionId
           || (sessionModule && sessionModule.getCurrentSessionId());
@@ -412,7 +684,7 @@ import * as Modals from './modalManager.js';
             return;
           }
         }
-        createDocument(sessionId);
+        createDocument(sessionId, { fresh: true });
       });
     }
 
@@ -3061,9 +3333,7 @@ import * as Modals from './modalManager.js';
           docs.delete(sendDocId);
           if (wasActiveSentDoc) {
             activeDocId = null;
-            const nextId = _visibleDocIdsForCurrentSession().find(id => docs.has(id));
-            if (nextId) switchToDoc(nextId);
-            else closePanel();
+            _activateNextEditorTabOrEmpty();
           } else {
             renderTabs();
           }
@@ -3151,6 +3421,23 @@ import * as Modals from './modalManager.js';
     return ids;
   }
 
+  /** After closing a tab: open another tab or show empty editor — keep panel open. */
+  function _activateNextEditorTabOrEmpty() {
+    const visible = _visibleDocIdsForCurrentSession();
+    if (visible.length) {
+      switchToDoc(visible[0]);
+      return;
+    }
+    const filePaths = [...workspaceFiles.keys()];
+    if (filePaths.length) {
+      switchToWorkspaceFile(filePaths[filePaths.length - 1]);
+      return;
+    }
+    activeWorkspaceFile = null;
+    _restoreDocEditorChrome();
+    showEmptyState();
+  }
+
   function _detachActiveEmailForBackground(docId) {
     if (!docId || !docs.has(docId)) return null;
     saveCurrentToMap();
@@ -3170,7 +3457,7 @@ import * as Modals from './modalManager.js';
       if (nextId) {
         switchToDoc(nextId);
       } else {
-        closePanel();
+        _activateNextEditorTabOrEmpty();
       }
     }
     renderTabs();
@@ -3201,7 +3488,7 @@ import * as Modals from './modalManager.js';
     if (remaining.length > 0) {
       switchToDoc(remaining[0]);
     } else {
-      closePanel();
+      _activateNextEditorTabOrEmpty();
     }
     renderTabs();
   }
@@ -3448,8 +3735,10 @@ import * as Modals from './modalManager.js';
     _hideLoadingOverlay();
     if (_diffModeActive) exitDiffMode(true);
 
-    // Save current doc state before switching
+    // Save current tab state before switching
     saveCurrentToMap();
+    activeWorkspaceFile = null;
+    _restoreDocEditorChrome();
 
     // Auto-delete the doc we're leaving if it's completely empty
     const prevId = activeDocId;
@@ -3607,23 +3896,10 @@ import * as Modals from './modalManager.js';
   async function closeTab(docId) {
     // Save current editor content to map so the check below uses fresh data
     saveCurrentToMap();
+    const wasActive = activeDocId === docId;
     _detachDocFromSession(docId, { toast: true });
-    // Find next tab in the current session
-    const curSession = sessionModule?.getCurrentSessionId() || '';
-    let nextId = null;
-    for (const [id, d] of docs) {
-      if (!d.sessionId || !curSession || d.sessionId === curSession) {
-        nextId = id;
-        break;
-      }
-    }
-    if (!nextId) {
-      activeDocId = null;
-      closePanel();
-      return;
-    }
-    if (activeDocId === docId) {
-      switchToDoc(nextId);
+    if (wasActive) {
+      _activateNextEditorTabOrEmpty();
     } else {
       renderTabs();
     }
@@ -3676,8 +3952,12 @@ import * as Modals from './modalManager.js';
     }
   }
 
-  /** Save current editor state back into the docs map */
+  /** Save current editor state back into the docs map or workspace file tab */
   function saveCurrentToMap() {
+    if (activeWorkspaceFile && workspaceFiles.has(activeWorkspaceFile)) {
+      _flushWorkspaceFileToMap();
+      return;
+    }
     if (!activeDocId || !docs.has(activeDocId)) return;
     const doc = docs.get(activeDocId);
     const textarea = document.getElementById('doc-editor-textarea');
@@ -3713,6 +3993,33 @@ import * as Modals from './modalManager.js';
   }
 
   // ---- Panel open/close ----
+
+  /** Place doc pane + divider in layout; returns isRight for divider drag. */
+  function _insertDocPaneInLayout(pane, divider, container) {
+    const workbench = document.getElementById('ws-workbench-column');
+    const terminalDock = document.getElementById('ws-terminal-dock');
+    const useWorkbench = workbench && document.body.classList.contains('ws-explorer-view');
+    const sidebar = document.getElementById('sidebar');
+    const isRight = sidebar && sidebar.classList.contains('right-side');
+
+    if (useWorkbench) {
+      pane.classList.toggle('doc-left', !!isRight);
+      workbench.insertBefore(pane, terminalDock || null);
+      container.parentNode.insertBefore(divider, container);
+      return isRight;
+    }
+
+    if (isRight) {
+      pane.classList.add('doc-left');
+      container.parentNode.insertBefore(pane, container);
+      container.parentNode.insertBefore(divider, container);
+    } else {
+      pane.classList.remove('doc-left');
+      container.after(divider);
+      divider.after(pane);
+    }
+    return isRight;
+  }
 
   export function openPanel() {
     if (isOpen) return;
@@ -4021,19 +4328,7 @@ import * as Modals from './modalManager.js';
       });
     }
 
-    // Insert after chat-container (appears on right by default)
-    // If sidebar is on the right, insert before chat-container instead
-    const sidebar = document.getElementById('sidebar');
-    const isRight = sidebar && sidebar.classList.contains('right-side');
-    if (isRight) {
-      pane.classList.add('doc-left');
-      container.parentNode.insertBefore(pane, container);
-      container.parentNode.insertBefore(divider, container);
-    } else {
-      pane.classList.remove('doc-left');
-      container.after(divider);
-      divider.after(pane);
-    }
+    const isRight = _insertDocPaneInLayout(pane, divider, container);
 
     // Slide-in animation from the correct side
     const fromLeft = pane.classList.contains('doc-left');
@@ -4665,6 +4960,24 @@ import * as Modals from './modalManager.js';
       ta.addEventListener('input', () => {
         // Typing invalidates any pinned selection highlight
         if (_selections.length) clearSelection();
+        if (activeWorkspaceFile && workspaceFiles.has(activeWorkspaceFile)) {
+          const ft = workspaceFiles.get(activeWorkspaceFile);
+          ft.content = ta.value;
+          if (!ft.dirty) _setWorkspaceFileDirty(activeWorkspaceFile, true);
+          const codeEl = document.getElementById('doc-editor-code');
+          if (codeEl && !codeEl.dataset.hasDiff) {
+            codeEl.textContent = ta.value + '\n';
+            codeEl.style.minHeight = ta.scrollHeight + 'px';
+          }
+          if (pre) {
+            pre.scrollTop = ta.scrollTop;
+            pre.scrollLeft = ta.scrollLeft;
+          }
+          updateLineNumbers(ta.value);
+          clearTimeout(_hlDebounce);
+          _hlDebounce = setTimeout(syncHighlighting, 80);
+          return;
+        }
         // Auto-create a document if user types/pastes with no active doc.
         // Skip while a createDocument POST is in flight — otherwise typing
         // during the round-trip spawns a duplicate untitled doc.
@@ -4708,6 +5021,11 @@ import * as Modals from './modalManager.js';
       });
       // Tab key inserts a real tab; Escape clears selection
       ta.addEventListener('keydown', (e) => {
+        if ((e.ctrlKey || e.metaKey) && e.key === 's' && activeWorkspaceFile) {
+          e.preventDefault();
+          saveWorkspaceFile().catch((err) => { if (uiModule?.showError) uiModule.showError(err.message || 'Save failed'); });
+          return;
+        }
         if (e.key === 'Escape') {
           if (_diffModeActive) { exitDiffMode(true); return; }
           // First Esc clears any pinned selection without closing the
@@ -4920,7 +5238,7 @@ import * as Modals from './modalManager.js';
     renderTabs();
 
     // If no docs loaded, show empty state with helpful placeholder
-    if (docs.size === 0 || !activeDocId) {
+    if ((docs.size === 0 || !activeDocId) && workspaceFiles.size === 0 && !activeWorkspaceFile) {
       showEmptyState();
     }
   }
@@ -5782,20 +6100,7 @@ import * as Modals from './modalManager.js';
     const container = document.getElementById('chat-container');
     if (!pane || !divider || !container) return;
 
-    const sidebar = document.getElementById('sidebar');
-    const isRight = sidebar && sidebar.classList.contains('right-side');
-
-    if (isRight) {
-      // Sidebar moved right → doc goes left (before chat)
-      pane.classList.add('doc-left');
-      container.parentNode.insertBefore(pane, container);
-      container.parentNode.insertBefore(divider, container);
-    } else {
-      // Sidebar moved left → doc goes right (after chat)
-      pane.classList.remove('doc-left');
-      container.after(divider);
-      divider.after(pane);
-    }
+    const isRight = _insertDocPaneInLayout(pane, divider, container);
 
     // Re-init divider drag for the new side
     initDividerDrag(divider, pane, isRight);
@@ -5815,23 +6120,25 @@ import * as Modals from './modalManager.js';
       try { sessionId = await _autoCreateSession(); }
       catch (e) { console.error('Failed to auto-create session for document:', e); return; }
     }
-    await createDocument(sessionId);
+    await createDocument(sessionId, { fresh: true });
   }
 
-  export async function createDocument(sessionId) {
+  export async function createDocument(sessionId, opts = {}) {
+    const fresh = opts.fresh === true;
     if (_creatingDoc) return;
     _creatingDoc = true;
-    // If the panel was in empty-state, the user may type into the editor
-    // during the create round-trip — preserve that text into the new doc
-    // instead of letting switchToDoc blank it.
-    const wasEmpty = !activeDocId;
+    if (fresh) saveCurrentToMap();
+    // Preserve text typed into the ghost empty editor only — never when the
+    // user explicitly clicked "+" (fresh) or when a workspace file is open.
+    const wasEmpty = !activeDocId && !activeWorkspaceFile;
+    const draftTitle = fresh ? _makeDraftTitle() : '';
     try {
       const res = await fetch(`${API_BASE}/api/document`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           session_id: sessionId,
-          title: '',
+          title: draftTitle,
           content: '',
           language: 'markdown',
         }),
@@ -5845,9 +6152,7 @@ import * as Modals from './modalManager.js';
         textarea.disabled = false;
         textarea.placeholder = 'Document content...';
       }
-      // Capture text typed during the round-trip (only when starting from the
-      // empty editor — don't steal another doc's content).
-      const typed = (wasEmpty && textarea && textarea.value.trim()) ? textarea.value : '';
+      const typed = (!fresh && wasEmpty && textarea && textarea.value.trim()) ? textarea.value : '';
       switchToDoc(doc.id);
       if (typed) {
         textarea = document.getElementById('doc-editor-textarea');
@@ -6102,7 +6407,7 @@ import * as Modals from './modalManager.js';
       id: doc.id,
       title: doc.title || '',
       language: doc.language || '',
-      content: doc.current_content || '',
+      content: doc.current_content ?? doc.content ?? existing?.content ?? '',
       version: doc.version_count || 1,
       sessionId: sessionId || doc.session_id,
       userSetLanguage: !!doc.language,
@@ -8502,14 +8807,8 @@ import * as Modals from './modalManager.js';
       const tab = document.querySelector(`.doc-tab[data-doc-id="${activeDocId}"]`);
       if (tab) tab.remove();
       docs.delete(activeDocId);
-      // Switch to another doc or close panel
-      const remaining = Array.from(docs.keys());
-      if (remaining.length > 0) {
-        switchToDoc(remaining[0]);
-      } else {
-        activeDocId = null;
-        closePanel();
-      }
+      // Switch to another tab or show empty editor — keep panel open
+      _activateNextEditorTabOrEmpty();
       if (uiModule) uiModule.showToast('Document deleted');
     } catch (e) {
       console.error('Failed to delete document:', e);
@@ -9603,7 +9902,7 @@ import * as Modals from './modalManager.js';
     const id = docId || activeDocId;
     if (!id) return;
     const doc = docs.get(id);
-    if (!doc || (doc.title && doc.title !== '' && doc.title !== 'Untitled')) return;
+    if (!doc || !_isPlaceholderTitle(doc.title)) return;
 
     const text = (content || '').trimStart();
     if (!text) return;
@@ -9724,6 +10023,12 @@ const documentModule = {
   isDiffModeActive,
   getCurrentDocId,
   findEmailDocId,
+  openWorkspaceFile,
+  saveWorkspaceFile,
+  removeWorkspaceFileTab,
+  clearWorkspaceFiles,
+  hasDirtyWorkspaceFiles,
+  getWorkspaceFileState,
   getSelectionContext,
   clearSelection,
   clearAll,

@@ -46,6 +46,10 @@ _PANEL = (
     r"settings|cookbook|sessions?|chats?|skills|memories|memory|brain)"
 )
 
+# Categories that auto-escalate from chat → agent but should NOT get shell/file
+# tools (calendar/notes/email can be handled by manage_* tools alone).
+LIGHT_ESCALATION_CATEGORIES = frozenset({"calendar", "notes", "email", "ui", "research"})
+
 _ROUTING_PATTERNS: tuple[tuple[str, str, Pattern[str]], ...] = tuple(
     (category, reason, re.compile(pattern, re.I))
     for category, reason, pattern in (
@@ -109,6 +113,11 @@ _ROUTING_PATTERNS: tuple[tuple[str, str, Pattern[str]], ...] = tuple(
         ("shell", "direct npx/npm command", r"^\s*(?:npx|npm|yarn|pnpm)\s+\S+"),
         ("shell", "direct create-react-app command", r"^\s*create-react-app\s+\S+"),
         ("shell", "system/file check request", r"\b(check|see)\s+(if|whether|what)\s+.{1,40}\b(running|process|service|port|file|exists?)\b"),
+
+        # Workspace file mutations (delete/remove/clear).
+        ("workspace", "delete/remove workspace file", rf"{_PLEASE}(?:delete|remove)\s+(?:the\s+)?(?:file\s+)?[\w./~-]+\S*"),
+        ("workspace", "delete all in folder", rf"{_PLEASE}delete\s+all\b"),
+        ("workspace", "clear workspace folder", rf"{_PLEASE}(?:clear|empty|wipe)\s+(?:the\s+)?(?:workspace|folder|directory|project)\b"),
     )
 )
 

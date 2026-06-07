@@ -1047,6 +1047,13 @@
                 <span>Workspace</span>
                 <span class="overflow-active-dot"></span>
               </button>
+              <button type="button" class="overflow-menu-item" id="overflow-ws-files-btn">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="12" y1="18" x2="12" y2="12"/><polyline points="9 15 12 18 15 15"/>
+                </svg>
+                <span>Project files</span>
+                <span class="overflow-active-dot"></span>
+              </button>
               <!-- Inline "deep research mode" toggle removed (superseded by the
                    Deep Research sidebar / trigger_research). The hidden
                    #research-toggle checkbox is kept inert so existing JS refs
@@ -1079,10 +1086,13 @@
             </svg>
           </button>
           <!-- Workspace indicator (hidden until a folder is set) -->
-          <button type="button" class="input-icon-btn tool-indicator" title="Workspace — click to clear" id="workspace-indicator-btn" aria-label="Clear workspace" style="display:none;">
+          <button type="button" class="input-icon-btn tool-indicator" title="Workspace — click name to open project files, ✕ to clear" id="workspace-indicator-btn" aria-label="Workspace folder" style="display:none;">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>
             <span style="font-size:11px;margin-left:2px;max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" id="workspace-indicator-name"></span>
             <svg class="tool-indicator-x" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round"><line x1="6" y1="6" x2="18" y2="18"/><line x1="18" y1="6" x2="6" y2="18"/></svg>
+          </button>
+          <button type="button" class="input-icon-btn" title="Project file tree" id="workspace-files-btn" aria-label="Open project files" style="display:none;">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="12" y1="18" x2="12" y2="12"/><polyline points="9 15 12 18 15 15"/></svg>
           </button>
           <!-- Plan mode (investigate read-only, propose a plan to approve) -->
           <button type="button" class="input-icon-btn" title="Plan mode — investigate read-only, then propose a plan to approve" id="plan-toggle-btn" data-mode-tool="true">

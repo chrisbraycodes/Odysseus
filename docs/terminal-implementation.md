@@ -136,10 +136,11 @@ Without `pywinpty`, the terminal shows a clear install hint on Windows.
 - xterm theme from Odysseus CSS variables (`--bg`, `--fg`, `--brand-color`)
 - Web links addon for clickable URLs
 
-### 2026-06-07 — UX: panel visible by default
-- Desktop loads with **Project files** panel open (file tree + terminal shell)
-- Panel stays open when workspace is cleared; shows “Choose folder…” CTA
-- Closing the panel with ✕ sets preference so it stays closed until reopened
+### 2026-06-07 — UX: IDE layout always on (desktop)
+- Desktop **always** loads with the full IDE layout: **Project files** (tree) + **editor** + **terminal dock**
+- Layout restores on every page load / Docker restart — closing ✕ only hides panels for the current session
+- No workspace yet: tree shows “Choose folder…”; terminal shows placeholder until a workspace is picked
+- Mobile stays chat-first (IDE panels hidden until opened manually)
 
 ### 2026-06-07 — Phase 4 ✅
 - Multi-tab terminal panel (`createWorkspaceTerminalPanel`) with + / × controls

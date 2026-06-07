@@ -15,6 +15,7 @@ import os
 import pathlib
 import re
 import shlex
+import shutil
 import sys
 import time
 from typing import Any, Awaitable, Callable, Dict, Optional, Tuple
@@ -22,12 +23,20 @@ from typing import Any, Awaitable, Callable, Dict, Optional, Tuple
 from src.tool_security import is_public_blocked_tool, owner_is_admin_or_single_user
 from src.constants import MAX_OUTPUT_CHARS, MAX_READ_CHARS, MAX_DIFF_LINES
 
-# Persistent working directory for agent subprocesses.
-# Resolves to <repo_root>/data, which is the bind-mounted volume in Docker
-# (/app/data) and the local data directory for manual installs.
-# Using this as cwd and HOME prevents the agent from silently creating files
-# in ephemeral container layers that are lost on the next rebuild.
+# Persistent working directory for agent subprocesses when no workspace pill is set.
+# Prefer the Desktop bind mount (/workspace) in Docker so projects land on the host
+# instead of odysseus/data/ (which is container-internal and invisible on Desktop).
 _AGENT_WORKDIR = str(pathlib.Path(__file__).parent.parent / "data")
+
+
+def _default_agent_cwd() -> str:
+    """Default bash/python cwd when the user has not picked a workspace folder."""
+    override = (os.environ.get("ODYSSEUS_WORKSPACE_ROOT") or "").strip()
+    if override and os.path.isdir(override):
+        return os.path.realpath(override)
+    if os.path.isdir("/workspace"):
+        return "/workspace"
+    return _AGENT_WORKDIR
 
 
 def _unified_diff(old: str, new: str, path: str) -> Optional[Dict[str, Any]]:
@@ -132,6 +141,55 @@ async def _do_edit_file(content: str, workspace: Optional[str] = None) -> Dict[s
     if diff:
         result["diff"] = diff
     return result
+
+
+async def _do_delete_file(content: str, workspace: Optional[str] = None) -> Dict[str, Any]:
+    """Delete a file or directory on disk, confined to the workspace when set."""
+    raw_path, recursive = "", False
+    _stripped = (content or "").strip()
+    if _stripped.startswith("{"):
+        try:
+            args = json.loads(_stripped)
+            raw_path = str(args.get("path", "")).strip()
+            recursive = bool(args.get("recursive"))
+        except (json.JSONDecodeError, TypeError, ValueError):
+            return {"error": "delete_file: invalid JSON", "exit_code": 1}
+    else:
+        lines = _stripped.split("\n")
+        raw_path = lines[0].strip()
+        if len(lines) > 1:
+            flag = lines[1].strip().lower()
+            recursive = flag in ("true", "1", "recursive", "recursive=true", "yes")
+    if not raw_path:
+        return {"error": "delete_file: path required", "exit_code": 1}
+    try:
+        path = (_resolve_tool_path_in_workspace(workspace, raw_path)
+                if workspace else _resolve_tool_path(raw_path))
+    except ValueError as e:
+        return {"error": f"delete_file: {e}", "exit_code": 1}
+    if not os.path.lexists(path):
+        return {"error": f"delete_file: {path}: not found", "exit_code": 1}
+
+    def _delete():
+        if os.path.isdir(path) and not os.path.islink(path):
+            if recursive:
+                shutil.rmtree(path)
+            else:
+                os.rmdir(path)
+        else:
+            os.remove(path)
+
+    try:
+        await asyncio.to_thread(_delete)
+    except OSError as e:
+        if os.path.isdir(path):
+            return {
+                "error": f"delete_file: {path}: directory not empty — set recursive=true",
+                "exit_code": 1,
+            }
+        return {"error": f"delete_file: {path}: {e}", "exit_code": 1}
+    return {"output": f"Deleted {path}", "exit_code": 0, "deleted": True, "path": path}
+
 
 # ---------------------------------------------------------------------------
 # Path confinement for read_file / write_file
@@ -717,7 +775,7 @@ async def _direct_fallback(
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 env=_subproc_env,
-                cwd=workspace or _AGENT_WORKDIR,
+                cwd=workspace or _default_agent_cwd(),
             )
             stdout, stderr, rc, timed_out = await _run_subprocess_streaming(
                 proc,
@@ -744,7 +802,7 @@ async def _direct_fallback(
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 env=_subproc_env,
-                cwd=workspace or _AGENT_WORKDIR,
+                cwd=workspace or _default_agent_cwd(),
             )
             stdout, stderr, rc, timed_out = await _run_subprocess_streaming(
                 proc,
@@ -848,6 +906,9 @@ async def _direct_fallback(
             if diff:
                 result["diff"] = diff
             return result
+
+        if tool == "delete_file":
+            return await _do_delete_file(content, workspace=workspace)
 
         if tool == "grep":
             # Args (JSON): {pattern, path?, glob?, ignore_case?, max_results?}.
@@ -1341,7 +1402,7 @@ async def execute_tool_block(
             from src import bg_jobs
             from src.workspace_dev import dev_server_preview_url, preview_note
 
-            rec = bg_jobs.launch(_bg_cmd, session_id=session_id, cwd=workspace or _AGENT_WORKDIR)
+            rec = bg_jobs.launch(_bg_cmd, session_id=session_id, cwd=workspace or _default_agent_cwd())
             short = _bg_cmd.strip().split(chr(10))[0][:80]
             desc = f"bash (background): {short}"
             preview = dev_server_preview_url(_bg_cmd)
@@ -1368,9 +1429,8 @@ async def execute_tool_block(
         first_line = content.split(chr(10))[0][:80]
         desc = f"{tool}: {first_line}"
         result = await _call_mcp_tool(tool, content, progress_cb=progress_cb, workspace=workspace)
-    elif tool in ("grep", "glob", "ls"):
-        # Code-navigation tools — no MCP server; run the direct implementation.
-        # Confined to the workspace when one is set (same policy as read_file).
+    elif tool in ("grep", "glob", "ls", "delete_file"):
+        # Code-navigation / filesystem tools — no MCP server; direct implementation.
         first_line = content.split(chr(10))[0][:80]
         desc = f"{tool}: {first_line}"
         result = await _direct_fallback(tool, content, progress_cb=progress_cb, workspace=workspace) \
@@ -1480,6 +1540,9 @@ async def execute_tool_block(
     elif tool == "edit_file":
         result = await _do_edit_file(content, workspace=workspace)
         desc = result.get("output") or result.get("error") or "edit_file"
+    elif tool == "delete_file":
+        result = await _do_delete_file(content, workspace=workspace)
+        desc = result.get("output") or result.get("error") or "delete_file"
     elif tool == "trigger_research":
         desc = "trigger_research"
         result = await do_trigger_research(content, owner=owner)

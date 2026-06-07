@@ -9,6 +9,7 @@ The LLM decides when to use tools by writing fenced code blocks.
 import asyncio
 import collections
 import json
+import os
 import re
 import time
 import logging
@@ -87,6 +88,7 @@ _AGENT_RULES = """\
 - User identity facts/preferences ("my name is <name>", "I live in <place>", "I prefer concise replies", "call me <name>") → use `manage_memory` with action=add. NEVER use `manage_contact` for facts about the user unless the user explicitly says to create/update a contact and provides contact details such as an email or phone.
 - "Create/add/write a note" / "notes" / "todos" / "remind me to X at <time>" → use `manage_notes`. Do NOT store notes in `manage_memory`; memory is for persistent facts/preferences about the user, not note content. For reminders, include a `due_date`; for todos, use `note_type=checklist` when appropriate.
 - "Do X every morning / daily / on a schedule / automatically" (e.g. "summarize my inbox every morning") → this is a request to CREATE A SCHEDULED TASK, not to do X once right now. Call `manage_tasks` with action=create (prompt = what to do, schedule + cron/time). Do NOT just perform the action inline this turn — the user wants it to recur. After creating, return a clickable `[Task name](#task-<id>)` link and tell them it'll run on schedule and show in the Tasks panel. If you also want to show a sample of this run, do that AFTER creating the task, not instead of it.
+- Delete/remove files or folders in the workspace: use `delete_file` (list with `ls` first if deleting many). Do NOT refuse — the user owns their workspace and destructive ops there are expected. Do NOT use bash `rm`.
 
 ## UI conventions
 - When you reference an entity by ID in your reply, render it as a STANDARD markdown link with a hash-prefixed anchor. The frontend converts these into clickable jump buttons:
@@ -139,6 +141,7 @@ _API_AGENT_RULES = """\
 - Multiple email accounts: if tool output says "Other accounts" or the user asks "my Gmail?", "other inbox?", "work mail?", "custom domain mail?", or names any mailbox/account, DO NOT answer from memory or infer it is the same inbox. Call `list_email_accounts` if needed, then call `list_emails`/`read_email`/`bulk_email` with the exact `account` value for that mailbox. Account names are user-defined labels; if the user typo-matches a known account, use the closest listed account instead of claiming it does not exist. NEVER use `app_api` or `/api/email/accounts` to discover email accounts; that route is owner-filtered in tool context and can falsely return empty.
 - User identity facts/preferences ("my name is <name>", "I live in <place>", "I prefer concise replies", "call me <name>") → use `manage_memory` with action=add. NEVER use `manage_contact` for facts about the user unless the user explicitly says to create/update a contact and provides contact details such as an email or phone.
 - You are running INSIDE Odysseus — there is no OpenWebUI, ChatGPT, or external chat backend to query. All chats/sessions live in THIS app and are accessed via `list_sessions` (or `manage_session` with `action=list`), and deleted via `manage_session` with `action=delete`. Do NOT shell out to find sqlite files, curl localhost:8080, or grep for routers — those don't exist here. If `list_sessions` returns rows, that IS the source of truth.
+- Delete/remove files or folders in the workspace: call `delete_file` (use `ls` first when deleting many). Do NOT refuse — workspace file ops are normal. Do NOT use bash `rm`.
 - After `list_sessions`, preserve the returned `[Chat title](#session-<id>)` links in your user-facing reply. Do not rewrite chat lists as plain tables with non-clickable titles.
 - "Cookbook" = the LLM-serving subsystem (NOT chat sessions, NOT a recipe app). Routing:
   • "What's running" / "what's serving" / "show my cookbook" / "is anything up" → **first action MUST be `list_served_models` (no args)**. The tool is ALWAYS available. Do not run `ps aux`, do not `curl localhost:8000`, do not `which vllm`. Even if you don't remember seeing the tool listed, it IS available — call it. The output IS the source of truth (it tracks diffusion models, vLLM, SGLang, llama.cpp, Ollama, etc. — anything spawned via the cookbook, including remote hosts that `ps aux` here can't see).
@@ -182,7 +185,7 @@ TOOL_SECTIONS = {
 ```
 Run any shell command. Output is returned to you. Use for: installing packages, checking files, git, system info, process management, etc.
 Do NOT use bash/curl for web lookup/search/latest/current requests when `web_search` or `web_fetch` is available.
-NEVER use bash to create or change files — no `>`/`>>` redirects, no heredocs (`cat > f << 'EOF'`), no `tee`, `sed -i`, `awk -i`, no `python -c` that writes. To CREATE or fully rewrite a file use `write_file`; to change part of an existing file use `edit_file`. Those show a diff and are the ONLY allowed way to write files. (bash is for read-only inspection: `ls`, `cat` to READ, `grep`, `git status`/`git diff`, builds, installs.)
+NEVER use bash to create, change, or delete files — no `>`/`>>` redirects, no heredocs (`cat > f << 'EOF'`), no `tee`, `sed -i`, `awk -i`, no `python -c` that writes, no `rm`. To CREATE or fully rewrite a file use `write_file`; to change part of an existing file use `edit_file`; to DELETE use `delete_file`. Those show a diff (write/edit) and are the ONLY allowed way to mutate files. (bash is for read-only inspection: `ls`, `cat` to READ, `grep`, `git status`/`git diff`, builds, installs.)
 Node.js: create projects in the active workspace cwd; do not copy `node_modules` across folders or in/out of the container — copy `package.json` (+ lockfile) and run `npm install`/`npm ci` at the destination. `npx create-react-app` and `npm install` belong here; use `#!bg` when they may exceed ~20s (Odysseus also auto-backgrounds installs and dev servers). For `npm start` / Vite dev: just run the command — Odysseus auto-runs `npm install` when deps are missing, sets `HOST=0.0.0.0`, and returns the preview URL (http://127.0.0.1:3000 or :5173). Tell the user to open that URL in a new tab.
 For LONG-running commands (package installs, pip/npm, ffmpeg, model downloads, training, builds — anything that may take more than ~20s), make the FIRST line `#!bg` to run it in the BACKGROUND. You get a job id back immediately and are automatically re-invoked with the full output when it finishes — so you never block the chat waiting. Example:
 ```bash
@@ -234,6 +237,12 @@ Write content to a file. First line is the path, rest is the content.""",
 {"path": "<file path>", "old_string": "<exact text to replace>", "new_string": "<replacement>", "replace_all": false}
 ```
 Edit an EXISTING file by exact string replacement. PREFER this over bash (sed/echo/redirects) for changing files — it shows a before/after diff. `old_string` must match the file exactly and be unique unless `replace_all` is true. Use write_file to create a new file.""",
+
+    "delete_file": """\
+```delete_file
+{"path": "<file or directory>", "recursive": false}
+```
+Delete a file or directory in the workspace. Use for "delete package.json", "remove that folder", "clear this project". Set `recursive: true` for non-empty directories. Do NOT refuse — the user owns their workspace. To wipe a folder: `ls` it first, then delete each entry (or recursive on subdirs). NEVER use bash `rm`.""",
 
     "create_document": """\
 ```create_document
@@ -1285,7 +1294,7 @@ def _compute_final_metrics(
 # read-only / Q&A turns are not.
 _VERIFIER_EFFECTFUL_TOOLS = {
     "create_document", "update_document", "edit_document",
-    "bash", "python", "write_file",
+    "bash", "python", "write_file", "delete_file",
 }
 _VERIFIER_MAX_ROUNDS = 2  # cap re-verify cycles per turn — never loop forever
 
@@ -1658,7 +1667,7 @@ async def stream_agent_loop(
             f"do NOT `cd` into it again. Use relative paths (e.g. `ls -la`, "
             f"`npx create-react-app my-app`). If you must reference the absolute path "
             f"in a shell command, quote it (paths may contain spaces).\n"
-            f"read_file/write_file/edit_file are confined to this folder (paths outside "
+            f"read_file/write_file/edit_file/delete_file are confined to this folder (paths outside "
             f"are rejected).\n"
             f"When the user says \"the code\" / \"this project\" / \"the workspace\" "
             f"or asks to review/find/edit something WITHOUT a path, they mean THIS "
@@ -1692,6 +1701,19 @@ async def stream_agent_loop(
         else:
             messages.insert(0, {"role": "system", "content": _ws_note})
         logger.info("[workspace] active for this turn: %s", workspace)
+    elif os.path.isdir("/workspace"):
+        _ws_warn = (
+            "## DESKTOP WORKSPACE AVAILABLE — SET A FOLDER\n"
+            "No workspace is selected. Shell/file tools default to `/workspace` "
+            "(your Desktop). For projects, use the workspace pill or "
+            "`/workspace pick` → choose e.g. `test workspace` BEFORE "
+            "`npx create-react-app` — otherwise files may land on Desktop root "
+            "or in odysseus/data/ if misconfigured."
+        )
+        if messages and messages[0].get("role") == "system":
+            messages[0]["content"] = _ws_warn + "\n\n" + (messages[0].get("content") or "")
+        else:
+            messages.insert(0, {"role": "system", "content": _ws_warn})
     # User pasted a literal shell command (e.g. "npx create-react-app batman").
     # Small models answer with tutorials unless we pin execute-now at the top.
     try:

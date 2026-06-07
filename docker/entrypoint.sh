@@ -34,17 +34,27 @@ fi
 #   - services/tts cache, etc.
 # These dirs were created as root during `docker build`, so dropping
 # to PUID:PGID would otherwise crash on the first import that tries
-# to mkdir them. Chown the whole /app tree — fast (<1s on this size)
-# and idempotent via the `-not -uid` filter so we only touch files
-# that need fixing.
-for dir in /app /app/data /app/logs; do
-    if [ -d "$dir" ]; then
-        # `find ... -not -uid` keeps this O(touched-files), not
-        # O(everything), so terabyte-sized maildirs don't slow startup.
-        find "$dir" -not -uid "$PUID" -print0 2>/dev/null \
-            | xargs -0 -r chown "$PUID:$PGID" 2>/dev/null || true
-    fi
+# to mkdir them.
+#
+# Repair ownership on writable paths. NEVER recurse into bind-mounted
+# data/ or .local/ — on Windows those can hold Chroma, HF caches, pip
+# wheels (100k+ files) and block startup for many minutes. setup.py
+# runs as the app user and creates data/ with correct ownership.
+_chown_if_needed() {
+    find "$1" -maxdepth "${2:-4}" -not -uid "$PUID" -print0 2>/dev/null \
+        | xargs -0 -r chown "$PUID:$PGID" 2>/dev/null || true
+}
+for dir in /app/logs /app/services /app/.ssh; do
+    [ -d "$dir" ] && _chown_if_needed "$dir" 4
 done
+# Top-level data/ entries only (auth.json, app.db symlinks, etc.)
+if [ -d /app/data ]; then
+    _chown_if_needed /app/data 1
+fi
+# .local/bin only — not the full pip site-packages tree
+if [ -d /app/.local/bin ]; then
+    _chown_if_needed /app/.local/bin 1
+fi
 
 # Cookbook installs vllm/etc. via `pip install --user`, which pulls
 # nvidia-cuda-* wheels into /app/.local but does not set CUDA_HOME or

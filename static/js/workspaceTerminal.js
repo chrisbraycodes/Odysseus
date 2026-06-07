@@ -2,10 +2,26 @@
 //
 // Interactive workspace terminal — xterm.js over WebSocket PTY.
 
-const XTERM_VERSION = '5.5.0';
-const XTERM_CSS = `https://cdn.jsdelivr.net/npm/@xterm/xterm@${XTERM_VERSION}/css/xterm.css`;
+// Bundled locally — jsdelivr ESM imports hang/fail on many networks.
+const XTERM_BASE = '/static/lib/xterm';
 
 let _xtermLoaded = null;
+
+function _loadScript(src, id, timeoutMs = 15000) {
+  if (document.querySelector(`script[data-xterm="${id}"]`)) return Promise.resolve();
+  return new Promise((resolve, reject) => {
+    const s = document.createElement('script');
+    s.src = src;
+    s.setAttribute('data-xterm', id);
+    const timer = window.setTimeout(() => reject(new Error(`Timed out loading ${id}`)), timeoutMs);
+    s.onload = () => { window.clearTimeout(timer); resolve(); };
+    s.onerror = () => {
+      window.clearTimeout(timer);
+      reject(new Error(`Failed to load ${id}`));
+    };
+    document.head.appendChild(s);
+  });
+}
 
 function _loadXterm() {
   if (_xtermLoaded) return _xtermLoaded;
@@ -13,21 +29,24 @@ function _loadXterm() {
     if (!document.querySelector('link[data-xterm-css]')) {
       const link = document.createElement('link');
       link.rel = 'stylesheet';
-      link.href = XTERM_CSS;
+      link.href = `${XTERM_BASE}/xterm.css`;
       link.setAttribute('data-xterm-css', '1');
       document.head.appendChild(link);
     }
-    const [xterm, fitMod, webLinksMod] = await Promise.all([
-      import(`https://cdn.jsdelivr.net/npm/@xterm/xterm@${XTERM_VERSION}/+esm`),
-      import(`https://cdn.jsdelivr.net/npm/@xterm/addon-fit@${XTERM_VERSION}/+esm`),
-      import(`https://cdn.jsdelivr.net/npm/@xterm/addon-web-links@${XTERM_VERSION}/+esm`),
-    ]);
-    return {
-      Terminal: xterm.Terminal,
-      FitAddon: fitMod.FitAddon,
-      WebLinksAddon: webLinksMod.WebLinksAddon,
-    };
-  })();
+    await _loadScript(`${XTERM_BASE}/xterm.js`, 'core');
+    await _loadScript(`${XTERM_BASE}/addon-fit.js`, 'fit');
+    await _loadScript(`${XTERM_BASE}/addon-web-links.js`, 'web-links');
+    const Terminal = globalThis.Terminal;
+    const FitAddon = globalThis.FitAddon?.FitAddon ?? globalThis.FitAddon;
+    const WebLinksAddon = globalThis.WebLinksAddon?.WebLinksAddon ?? globalThis.WebLinksAddon;
+    if (!Terminal || !FitAddon || !WebLinksAddon) {
+      throw new Error('xterm.js loaded but required globals are missing');
+    }
+    return { Terminal, FitAddon, WebLinksAddon };
+  })().catch((err) => {
+    _xtermLoaded = null;
+    throw err;
+  });
   return _xtermLoaded;
 }
 
