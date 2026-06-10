@@ -1,0 +1,22 @@
+@echo off
+setlocal
+title Start Odysseus
+
+pushd "%~dp0" >nul
+
+echo =========================================
+echo Starting Odysseus (Docker)
+echo =========================================
+echo.
+
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0launch-docker.ps1" %*
+set "EXIT_CODE=%ERRORLEVEL%"
+
+if %EXIT_CODE% neq 0 (
+  echo.
+  echo Start failed. Check the message above and try again.
+  pause
+)
+
+popd >nul
+exit /b %EXIT_CODE%

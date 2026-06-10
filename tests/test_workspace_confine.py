@@ -77,6 +77,184 @@ def test_browse_is_admin_gated(monkeypatch):
     assert all("name" in d and "path" in d for d in out["dirs"])
 
 
+def test_workspace_list_read_write_api(monkeypatch, tmp_path):
+    """Project explorer endpoints list/read/write within the workspace root."""
+    from fastapi import HTTPException
+    import routes.workspace_routes as wr
+
+    ws = tmp_path / "project"
+    ws.mkdir()
+    (ws / "hello.txt").write_text("hi", encoding="utf-8")
+    sub = ws / "src"
+    sub.mkdir()
+    (sub / "app.js").write_text("console.log(1)", encoding="utf-8")
+
+    monkeypatch.setattr(wr, "get_current_user", lambda req: "admin")
+    monkeypatch.setattr(wr, "owner_is_admin_or_single_user", lambda owner: True)
+
+    router = wr.setup_workspace_routes()
+    list_fn = next(r.endpoint for r in router.routes if r.path == "/api/workspace/list")
+    read_fn = next(r.endpoint for r in router.routes if r.path == "/api/workspace/file" and "GET" in r.methods)
+    write_fn = next(r.endpoint for r in router.routes if r.path == "/api/workspace/file" and "PUT" in r.methods)
+
+    root = str(ws)
+    listed = list_fn(request=object(), workspace=root, path="")
+    assert listed["path"] == ""
+    assert any(d["name"] == "src" for d in listed["dirs"])
+    assert any(f["name"] == "hello.txt" for f in listed["files"])
+
+    nested = list_fn(request=object(), workspace=root, path="src")
+    assert nested["path"] == "src"
+    assert any(f["name"] == "app.js" for f in nested["files"])
+
+    got = read_fn(request=object(), workspace=root, path="hello.txt")
+    assert got["content"] == "hi"
+
+    from types import SimpleNamespace
+    body = SimpleNamespace(workspace=root, path="src/new.txt", content="new")
+    write_fn(request=object(), body=body)
+    assert (sub / "new.txt").read_text(encoding="utf-8") == "new"
+
+    monkeypatch.setattr(wr, "owner_is_admin_or_single_user", lambda owner: False)
+    with pytest.raises(HTTPException) as ei:
+        list_fn(request=object(), workspace=root, path="")
+    assert ei.value.status_code == 403
+
+
+def test_docker_rejects_unmapped_host_workspace(monkeypatch):
+    """In Docker, host paths outside /workspace must not reach the file tree API."""
+    from fastapi import HTTPException
+    import routes.workspace_routes as wr
+
+    monkeypatch.setattr(wr, "docker_workspace_available", lambda: True)
+    monkeypatch.setattr(wr, "resolve_workspace_path", lambda raw: "")
+    monkeypatch.setattr(wr, "get_current_user", lambda req: "admin")
+    monkeypatch.setattr(wr, "owner_is_admin_or_single_user", lambda owner: True)
+
+    router = wr.setup_workspace_routes()
+    list_fn = next(r.endpoint for r in router.routes if r.path == "/api/workspace/list")
+
+    with pytest.raises(HTTPException) as ei:
+        list_fn(request=object(), workspace=r"C:\Users\Public", path="")
+    assert ei.value.status_code == 400
+    assert "container" in ei.value.detail.lower()
+
+
+def test_workspace_delete_file_api(monkeypatch, tmp_path):
+    """DELETE /api/workspace/file removes files and folders within the workspace."""
+    from fastapi import HTTPException
+    import routes.workspace_routes as wr
+
+    ws = tmp_path / "project"
+    ws.mkdir()
+    hello = ws / "hello.txt"
+    hello.write_text("hi", encoding="utf-8")
+    empty_dir = ws / "empty"
+    empty_dir.mkdir()
+    nested = ws / "nested"
+    nested.mkdir()
+    (nested / "a.txt").write_text("a", encoding="utf-8")
+
+    monkeypatch.setattr(wr, "get_current_user", lambda req: "admin")
+    monkeypatch.setattr(wr, "owner_is_admin_or_single_user", lambda owner: True)
+
+    router = wr.setup_workspace_routes()
+    delete_fn = next(
+        r.endpoint for r in router.routes
+        if r.path == "/api/workspace/file" and "DELETE" in r.methods
+    )
+
+    root = str(ws)
+    delete_fn(request=object(), workspace=root, path="hello.txt", recursive=False)
+    assert not hello.exists()
+
+    delete_fn(request=object(), workspace=root, path="empty", recursive=False)
+    assert not empty_dir.exists()
+
+    delete_fn(request=object(), workspace=root, path="nested", recursive=True)
+    assert not nested.exists()
+
+    with pytest.raises(HTTPException) as ei:
+        delete_fn(request=object(), workspace=root, path="nested", recursive=False)
+    assert ei.value.status_code == 404
+
+
+class _FakeUpload:
+    def __init__(self, data: bytes, filename: str):
+        self._data = data
+        self.filename = filename
+
+    async def read(self, size: int = -1):
+        if size is None or size < 0:
+            chunk, self._data = self._data, b""
+            return chunk
+        chunk, self._data = self._data[:size], self._data[size:]
+        return chunk
+
+
+@pytest.mark.asyncio
+async def test_workspace_import_and_download_api(monkeypatch, tmp_path):
+    """POST /import copies uploads into the workspace; GET /download streams them out."""
+    from fastapi import HTTPException
+    from starlette.responses import FileResponse
+    import routes.workspace_routes as wr
+
+    ws = tmp_path / "project"
+    ws.mkdir()
+
+    monkeypatch.setattr(wr, "get_current_user", lambda req: "admin")
+    monkeypatch.setattr(wr, "owner_is_admin_or_single_user", lambda owner: True)
+
+    router = wr.setup_workspace_routes()
+    import_fn = next(r.endpoint for r in router.routes if r.path == "/api/workspace/import")
+    download_fn = next(r.endpoint for r in router.routes if r.path == "/api/workspace/download")
+
+    root = str(ws)
+    payload = b"imported bytes"
+    result = await import_fn(
+        request=object(),
+        workspace=root,
+        path="",
+        file=_FakeUpload(payload, "from-host.txt"),
+    )
+    assert result["path"] == "from-host.txt"
+    assert (ws / "from-host.txt").read_bytes() == payload
+
+    sub = ws / "subdir"
+    sub.mkdir()
+    await import_fn(
+        request=object(),
+        workspace=root,
+        path="subdir",
+        file=_FakeUpload(b"nested", "nested.txt"),
+    )
+    assert (sub / "nested.txt").read_bytes() == b"nested"
+
+    # Path segments in the upload name are stripped — file stays inside workspace.
+    result = await import_fn(
+        request=object(),
+        workspace=root,
+        path="",
+        file=_FakeUpload(b"safe", "../escape.txt"),
+    )
+    assert result["path"] == "escape.txt"
+    assert (ws / "escape.txt").read_bytes() == b"safe"
+    assert not (ws.parent / "escape.txt").exists()
+
+    with pytest.raises(HTTPException) as ei:
+        await import_fn(
+            request=object(),
+            workspace=root,
+            path="",
+            file=_FakeUpload(b"x", ".."),
+        )
+    assert ei.value.status_code == 400
+
+    resp = download_fn(request=object(), workspace=root, path="from-host.txt")
+    assert isinstance(resp, FileResponse)
+    assert os.path.basename(resp.path) == "from-host.txt"
+
+
 @pytest.mark.asyncio
 async def test_subprocess_runs_with_workspace_cwd():
     """bash/python subprocesses run with cwd set to the workspace. Use the

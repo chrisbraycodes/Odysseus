@@ -80,10 +80,12 @@ async def _run_followup(rec: dict) -> bool:
     sm = get_session_manager()
     if not sm:
         return False  # not ready yet — retry
-    sess = sm.get_session(rec["session_id"])
-    if not sess:
-        # Session was deleted — nothing to continue. Consider it handled so we
-        # don't retry forever.
+    try:
+        sess = sm.get_session(rec["session_id"])
+    except KeyError:
+        # Session was deleted (or test job pointed at a fake id). Mark handled —
+        # get_session raises instead of returning None, so without this we retry
+        # forever and spam the logs every POLL_INTERVAL_S.
         logger.info("bg-followup: session %s gone for job %s — skipping", rec.get("session_id"), rec.get("id"))
         return True
 
@@ -99,11 +101,50 @@ async def _run_followup(rec: dict) -> bool:
     except Exception:
         pass
 
+    cmd = (rec.get("command") or "").strip()
+    hints = []
+    if rec.get("exit_code") not in (0, None) or rec.get("died") or rec.get("timed_out"):
+        hints.append(
+            "The job FAILED. Read the output above. Do NOT re-run the exact same "
+            "command without fixing the root cause."
+        )
+        if "create-react-app" in cmd.lower():
+            hints.append(
+                "If the error says the directory already exists or package.json is "
+                "invalid, run `rm -rf <name>` in bash ONCE, then retry "
+                "`npx create-react-app <name>` ONCE. Do not loop."
+            )
+        hints.append(
+            "No tutorials or troubleshooting essays — use ```bash``` to fix and verify."
+        )
+    else:
+        hints.append(
+            "Continue using this output. Don't repeat work that's already done. "
+            "If the task is complete, give a short final result."
+        )
+        low = cmd.lower()
+        from src.workspace_dev import dev_server_preview_url, preview_note
+
+        preview = dev_server_preview_url(cmd)
+        if preview:
+            hints.append(
+                "Tell the user to open the dev preview in a new browser tab"
+                + preview_note(preview)
+            )
+        elif "npm start" in low or "react-scripts start" in low:
+            hints.append(
+                "If the dev server is running, tell the user to open "
+                "http://127.0.0.1:3000 in a new browser tab (not an iframe)."
+            )
+        elif "vite" in low and ("dev" in low or "--host" in low):
+            hints.append(
+                "If the dev server is running, tell the user to open "
+                "http://127.0.0.1:5173 in a new browser tab (not an iframe)."
+            )
     inject = (
         f"[Background job {rec['id']} finished]\n\n"
         f"{bg_jobs.result_text(rec)}\n\n"
-        "Continue the task using this output. Don't repeat work that's already done. "
-        "If the task is now complete, give the user the final result."
+        + " ".join(hints)
     )
     context = sess.get_context_messages()
     context.append({"role": "user", "content": inject})

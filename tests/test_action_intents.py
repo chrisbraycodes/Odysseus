@@ -49,6 +49,15 @@ def test_research_action_promotes_to_agent():
     assert message_needs_tools("can you look into GPU hosting options")
 
 
+def test_workspace_file_delete_promotes_to_agent():
+    assert message_needs_tools("delete package.json")
+    assert message_needs_tools("delete all files in /workspace/test workspace")
+    assert message_needs_tools("remove the file foo.txt")
+    intent = classify_tool_intent("delete package.json")
+    assert intent.needs_tools
+    assert intent.category == "workspace"
+
+
 def test_explanatory_calendar_questions_stay_plain_chat():
     assert not message_needs_tools("How do I add an entry to my calendar?")
     assert not message_needs_tools("What about the built-in Odysseus calendar, is that linked to email?")

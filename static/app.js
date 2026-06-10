@@ -5,6 +5,7 @@
 import Storage from './js/storage.js';
 import uiModule from './js/ui.js';
 import workspaceModule from './js/workspace.js';
+import workspaceExplorerModule from './js/workspaceExplorer.js';
 import fileHandlerModule from './js/fileHandler.js';
 import modelsModule from './js/models.js';
 import ragModule from './js/rag.js';
@@ -1769,6 +1770,7 @@ function initializeEventListeners() {
   })();
 
   try { workspaceModule.initWorkspace(); } catch (_) {}
+  try { workspaceExplorerModule.initWorkspaceExplorer(); } catch (_) {}
 
   // Document editor toggle (special: uses module panel, not a checkbox)
   const overflowDocBtn = el('overflow-doc-btn');
@@ -3468,7 +3470,11 @@ function startOdysseusApp() {
     if (_curSession && localStorage.getItem('odysseus-doc-open-' + _curSession) === '1') {
       documentModule.loadSessionDocs(_curSession);
     }
-  }  
+  }
+  // Desktop: always restore IDE layout (file tree + editor + terminal dock).
+  try {
+    workspaceExplorerModule.ensureIdeLayoutOpen?.();
+  } catch (_) {}
   // Initialize search chat module
   if (searchChatModule) {
     searchChatModule.init(API_BASE);

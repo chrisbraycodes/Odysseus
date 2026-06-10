@@ -35,7 +35,7 @@ ALWAYS_AVAILABLE = frozenset({
     # be able to change files, not just read them — otherwise a bare "edit X"
     # request can miss write_file/edit_file (RAG-only) and the model wrongly
     # falls back to edit_document (editor panel). All admin-gated by tool_security.
-    "read_file", "write_file", "edit_file",
+    "read_file", "write_file", "edit_file", "delete_file",
     "grep", "glob", "ls",  # code-navigation tools (admin-gated by tool_security)
     "api_call",  # For configured integrations (Miniflux, Gitea, Linkding, etc.)
     # The two genuinely AMBIENT cookbook tools — "what's running" and
@@ -100,6 +100,7 @@ BUILTIN_TOOL_DESCRIPTIONS: Dict[str, str] = {
     "ls": "List a directory's entries (folders then files with sizes). Use to see what's in a folder — prefer over bash ls.",
     "write_file": "Write/create or fully rewrite a file ON DISK (source code, configs, project files). Use for new files or full rewrites — NOT create_document (editor panel) and NOT a bash heredoc.",
     "edit_file": "Edit an existing file ON DISK by exact string replacement (fix a bug, change a function). Shows a diff. The tool for changing files on disk — NOT edit_document (editor panel) and NOT bash sed/heredoc.",
+    "delete_file": "Delete a file or directory in the workspace. Use for delete/remove/clear requests on project files. Set recursive=true for non-empty folders. Prefer over bash rm — do not refuse workspace deletions.",
     "create_document": "Create a new document in the editor panel. For code, articles, text content longer than 15 lines, unless an already-open document/email draft is the obvious target. If an email compose draft is open, edit that draft instead of creating another document.",
     "edit_document": "Preferred tool for editing an existing document — targeted find-and-replace. Use for any small change: add a function, fix a bug, tweak a section, rename things.",
     "update_document": "Replace the entire active document content. ONLY for full rewrites (>50% changed). Do not use for small edits — use edit_document instead.",

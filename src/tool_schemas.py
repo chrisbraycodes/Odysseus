@@ -176,6 +176,21 @@ FUNCTION_TOOL_SCHEMAS = [
     {
         "type": "function",
         "function": {
+            "name": "delete_file",
+            "description": "Delete a file or directory in the workspace or allowed project paths. Use for 'delete package.json', 'remove this folder', 'clear the workspace'. Do NOT refuse — the user owns their workspace. Prefer this over bash rm. For non-empty directories set recursive=true. To delete everything in a folder, ls first then delete each entry.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "File or directory path (relative to workspace when one is active)"},
+                    "recursive": {"type": "boolean", "description": "Remove non-empty directories (default false)"}
+                },
+                "required": ["path"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "create_document",
             "description": "Create a new document in the editor panel. Use this when the user asks to write, create, build, or generate code, scripts, programs, games, apps, or any substantial content (>15 lines) AND there is no already-open document/email draft that the request refers to. If an email compose draft is open, edit that draft instead of creating another document. NEVER put large code blocks directly in chat — use this tool instead.",
             "parameters": {
@@ -765,7 +780,10 @@ FUNCTION_TOOL_SCHEMAS = [
                 "properties": {
                     "action": {"type": "string", "enum": ["list", "get", "set", "delete", "disable_tool", "enable_tool", "list_tools"]},
                     "key": {"type": "string", "description": "Setting key (for get/set/delete)"},
-                    "value": {"description": "Setting value (for set) — can be string, number, boolean, or object"},
+                    "value": {
+                        "type": "string",
+                        "description": "Setting value (for set). Pass scalars as plain strings; booleans as 'true'/'false'; numbers as numeric strings; objects as a JSON string.",
+                    },
                     "tool": {"type": "string", "description": "Tool name to disable/enable (for disable_tool/enable_tool). Accepts aliases: shell, search, browser, documents, memory, skills, images, tasks, notes, calendar, email — or a raw tool name like 'bash' or 'web_search'."}
                 },
                 "required": ["action"]
@@ -1249,6 +1267,8 @@ def function_call_to_tool_block(name: str, arguments: str) -> Optional[ToolBlock
     elif tool_type == "write_file":
         content = args.get("path", "") + "\n" + args.get("content", "")
     elif tool_type == "edit_file":
+        content = json.dumps(args)
+    elif tool_type == "delete_file":
         content = json.dumps(args)
     elif tool_type == "create_document":
         parts = [args.get("title", "Untitled")]

@@ -9,6 +9,7 @@ The LLM decides when to use tools by writing fenced code blocks.
 import asyncio
 import collections
 import json
+import os
 import re
 import time
 import logging
@@ -62,7 +63,9 @@ _AGENT_PREAMBLE = """\
 You are an AI assistant with tool access. You can run shell commands, execute Python, search the web, \
 read/write files, create and edit documents, generate images, manage memories, and more. \
 To use a tool, write a fenced code block with the tool name as the language tag. \
-The block executes automatically and you see the output."""
+The block executes automatically and you see the output. \
+When the user asks you to create, build, install, or run something: DO IT with tool blocks — \
+do NOT write numbered tutorials or paste commands for the user to copy. At most one short sentence, then ```bash blocks."""
 
 _AGENT_RULES = """\
 ## Rules
@@ -85,6 +88,7 @@ _AGENT_RULES = """\
 - User identity facts/preferences ("my name is <name>", "I live in <place>", "I prefer concise replies", "call me <name>") → use `manage_memory` with action=add. NEVER use `manage_contact` for facts about the user unless the user explicitly says to create/update a contact and provides contact details such as an email or phone.
 - "Create/add/write a note" / "notes" / "todos" / "remind me to X at <time>" → use `manage_notes`. Do NOT store notes in `manage_memory`; memory is for persistent facts/preferences about the user, not note content. For reminders, include a `due_date`; for todos, use `note_type=checklist` when appropriate.
 - "Do X every morning / daily / on a schedule / automatically" (e.g. "summarize my inbox every morning") → this is a request to CREATE A SCHEDULED TASK, not to do X once right now. Call `manage_tasks` with action=create (prompt = what to do, schedule + cron/time). Do NOT just perform the action inline this turn — the user wants it to recur. After creating, return a clickable `[Task name](#task-<id>)` link and tell them it'll run on schedule and show in the Tasks panel. If you also want to show a sample of this run, do that AFTER creating the task, not instead of it.
+- Delete/remove files or folders in the workspace: use `delete_file` (list with `ls` first if deleting many). Do NOT refuse — the user owns their workspace and destructive ops there are expected. Do NOT use bash `rm`.
 
 ## UI conventions
 - When you reference an entity by ID in your reply, render it as a STANDARD markdown link with a hash-prefixed anchor. The frontend converts these into clickable jump buttons:
@@ -137,6 +141,7 @@ _API_AGENT_RULES = """\
 - Multiple email accounts: if tool output says "Other accounts" or the user asks "my Gmail?", "other inbox?", "work mail?", "custom domain mail?", or names any mailbox/account, DO NOT answer from memory or infer it is the same inbox. Call `list_email_accounts` if needed, then call `list_emails`/`read_email`/`bulk_email` with the exact `account` value for that mailbox. Account names are user-defined labels; if the user typo-matches a known account, use the closest listed account instead of claiming it does not exist. NEVER use `app_api` or `/api/email/accounts` to discover email accounts; that route is owner-filtered in tool context and can falsely return empty.
 - User identity facts/preferences ("my name is <name>", "I live in <place>", "I prefer concise replies", "call me <name>") → use `manage_memory` with action=add. NEVER use `manage_contact` for facts about the user unless the user explicitly says to create/update a contact and provides contact details such as an email or phone.
 - You are running INSIDE Odysseus — there is no OpenWebUI, ChatGPT, or external chat backend to query. All chats/sessions live in THIS app and are accessed via `list_sessions` (or `manage_session` with `action=list`), and deleted via `manage_session` with `action=delete`. Do NOT shell out to find sqlite files, curl localhost:8080, or grep for routers — those don't exist here. If `list_sessions` returns rows, that IS the source of truth.
+- Delete/remove files or folders in the workspace: call `delete_file` (use `ls` first when deleting many). Do NOT refuse — workspace file ops are normal. Do NOT use bash `rm`.
 - After `list_sessions`, preserve the returned `[Chat title](#session-<id>)` links in your user-facing reply. Do not rewrite chat lists as plain tables with non-clickable titles.
 - "Cookbook" = the LLM-serving subsystem (NOT chat sessions, NOT a recipe app). Routing:
   • "What's running" / "what's serving" / "show my cookbook" / "is anything up" → **first action MUST be `list_served_models` (no args)**. The tool is ALWAYS available. Do not run `ps aux`, do not `curl localhost:8000`, do not `which vllm`. Even if you don't remember seeing the tool listed, it IS available — call it. The output IS the source of truth (it tracks diffusion models, vLLM, SGLang, llama.cpp, Ollama, etc. — anything spawned via the cookbook, including remote hosts that `ps aux` here can't see).
@@ -180,7 +185,8 @@ TOOL_SECTIONS = {
 ```
 Run any shell command. Output is returned to you. Use for: installing packages, checking files, git, system info, process management, etc.
 Do NOT use bash/curl for web lookup/search/latest/current requests when `web_search` or `web_fetch` is available.
-NEVER use bash to create or change files — no `>`/`>>` redirects, no heredocs (`cat > f << 'EOF'`), no `tee`, `sed -i`, `awk -i`, no `python -c` that writes. To CREATE or fully rewrite a file use `write_file`; to change part of an existing file use `edit_file`. Those show a diff and are the ONLY allowed way to write files. (bash is for read-only inspection: `ls`, `cat` to READ, `grep`, `git status`/`git diff`, builds, installs.)
+NEVER use bash to create, change, or delete files — no `>`/`>>` redirects, no heredocs (`cat > f << 'EOF'`), no `tee`, `sed -i`, `awk -i`, no `python -c` that writes, no `rm`. To CREATE or fully rewrite a file use `write_file`; to change part of an existing file use `edit_file`; to DELETE use `delete_file`. Those show a diff (write/edit) and are the ONLY allowed way to mutate files. (bash is for read-only inspection: `ls`, `cat` to READ, `grep`, `git status`/`git diff`, builds, installs.)
+Node.js: create projects in the active workspace cwd; do not copy `node_modules` across folders or in/out of the container — copy `package.json` (+ lockfile) and run `npm install`/`npm ci` at the destination. `npx create-react-app` and `npm install` belong here; use `#!bg` when they may exceed ~20s (Odysseus also auto-backgrounds installs and dev servers). For `npm start` / Vite dev: just run the command — Odysseus auto-runs `npm install` when deps are missing, sets `HOST=0.0.0.0`, and returns the preview URL (http://127.0.0.1:3000 or :5173). Tell the user to open that URL in a new tab.
 For LONG-running commands (package installs, pip/npm, ffmpeg, model downloads, training, builds — anything that may take more than ~20s), make the FIRST line `#!bg` to run it in the BACKGROUND. You get a job id back immediately and are automatically re-invoked with the full output when it finishes — so you never block the chat waiting. Example:
 ```bash
 #!bg
@@ -231,6 +237,12 @@ Write content to a file. First line is the path, rest is the content.""",
 {"path": "<file path>", "old_string": "<exact text to replace>", "new_string": "<replacement>", "replace_all": false}
 ```
 Edit an EXISTING file by exact string replacement. PREFER this over bash (sed/echo/redirects) for changing files — it shows a before/after diff. `old_string` must match the file exactly and be unique unless `replace_all` is true. Use write_file to create a new file.""",
+
+    "delete_file": """\
+```delete_file
+{"path": "<file or directory>", "recursive": false}
+```
+Delete a file or directory in the workspace. Use for "delete package.json", "remove that folder", "clear this project". Set `recursive: true` for non-empty directories. Do NOT refuse — the user owns their workspace. To wipe a folder: `ls` it first, then delete each entry (or recursive on subdirs). NEVER use bash `rm`.""",
 
     "create_document": """\
 ```create_document
@@ -1282,7 +1294,7 @@ def _compute_final_metrics(
 # read-only / Q&A turns are not.
 _VERIFIER_EFFECTFUL_TOOLS = {
     "create_document", "update_document", "edit_document",
-    "bash", "python", "write_file",
+    "bash", "python", "write_file", "delete_file",
 }
 _VERIFIER_MAX_ROUNDS = 2  # cap re-verify cycles per turn — never loop forever
 
@@ -1420,7 +1432,10 @@ def build_active_plan_note(approved_plan: str) -> str:
         "`- [x]` so progress stays visible in the user's plan window. If the user "
         "asks to change the plan, call `update_plan` with the revised checklist. "
         "Do the next unchecked item until all are done. Do not skip, reorder, or "
-        "invent steps; if a step is genuinely impossible, say so and stop.\n\n"
+        "invent steps; if a step is genuinely impossible, say so and stop.\n"
+        "Shell cwd is injected automatically each turn — do NOT run `pwd` or `cd` "
+        "just to verify location; mark those steps done and execute the real work "
+        "(e.g. `npm start`).\n\n"
         "Current plan:\n"
         + approved_plan.strip()
     )
@@ -1630,23 +1645,89 @@ async def stream_agent_loop(
         # PREPEND (not append) so it dominates the large base prompt — appended
         # at the end, small models ignored it and asked the user for code. The
         # folder IS the project; the agent must explore it, not ask.
+        try:
+            from src.direct_shell import last_user_message
+            from src.shell_orchestration import (
+                cwd_system_note,
+                plan_auto_notes,
+                resolve_effective_workspace,
+            )
+            _last_user = last_user_message(messages)
+        except Exception:
+            _last_user = ""
+            cwd_system_note = plan_auto_notes = resolve_effective_workspace = None  # type: ignore
+        if resolve_effective_workspace:
+            workspace = resolve_effective_workspace(
+                workspace, _last_user, (approved_plan or "")
+            ) or workspace
         _ws_note = (
             f"## ACTIVE WORKSPACE — READ FIRST\n"
             f"The user is working in this folder: {workspace}\n"
-            f"It IS the project. bash/python run with cwd set here and "
-            f"read_file/write_file are confined to it (paths outside are rejected).\n"
+            f"It IS the project. bash/python already run with cwd set to this folder — "
+            f"do NOT `cd` into it again. Use relative paths (e.g. `ls -la`, "
+            f"`npx create-react-app my-app`). If you must reference the absolute path "
+            f"in a shell command, quote it (paths may contain spaces).\n"
+            f"read_file/write_file/edit_file/delete_file are confined to this folder (paths outside "
+            f"are rejected).\n"
             f"When the user says \"the code\" / \"this project\" / \"the workspace\" "
             f"or asks to review/find/edit something WITHOUT a path, they mean THIS "
             f"folder. Do NOT ask the user for code or a path, and do NOT read a file "
             f"literally named \"workspace\". ALWAYS start by exploring it yourself: "
-            f"run `bash` → `git ls-files` (or `ls -R`) to see the files, then "
-            f"read_file the relevant ones by path RELATIVE to the workspace."
+            f"run `bash` → `ls -la` (or `ls -R`) to see the files, then "
+            f"read_file the relevant ones by path RELATIVE to the workspace.\n"
+            f"Node/npm projects: scaffold HERE (`npx create-react-app <name>`, "
+            f"`npm init`, etc.) — never create under /app and move later. "
+            f"NEVER `cp`/`mv`/`tar` `node_modules` (bind mounts make that slow "
+            f"and brittle). Copy only source + lockfiles (`package.json`, "
+            f"`package-lock.json`); run `npm install` or `npm ci` in the "
+            f"destination after files arrive.\n"
+            f"Scaffold requests (React app, npm project, etc.): run "
+            f"```bash\\nnpx create-react-app <name>\\n``` immediately — cwd is "
+            f"already here. No `cd`, no `sudo`, no tutorial steps.\n"
+            f"Dev preview: run ```bash\\nnpm start\\n``` (or `npm run dev` / `vite`) — "
+            f"Odysseus auto-installs deps, configures Docker networking, and returns "
+            f"the host preview URL. User opens it in a new browser tab."
         )
+        if cwd_system_note:
+            _cwd = cwd_system_note(workspace)
+            if _cwd:
+                _ws_note = _cwd + "\n\n" + _ws_note
+        if plan_auto_notes and approved_plan:
+            _pa = plan_auto_notes(approved_plan, workspace)
+            if _pa:
+                _ws_note = _ws_note + "\n\n" + _pa
         if messages and messages[0].get("role") == "system":
             messages[0]["content"] = _ws_note + "\n\n" + (messages[0].get("content") or "")
         else:
             messages.insert(0, {"role": "system", "content": _ws_note})
         logger.info("[workspace] active for this turn: %s", workspace)
+    elif os.path.isdir("/workspace"):
+        _ws_warn = (
+            "## DESKTOP WORKSPACE AVAILABLE — SET A FOLDER\n"
+            "No workspace is selected. Shell/file tools default to `/workspace` "
+            "(your Desktop). For projects, use the workspace pill or "
+            "`/workspace pick` → choose e.g. `test workspace` BEFORE "
+            "`npx create-react-app` — otherwise files may land on Desktop root "
+            "or in odysseus/data/ if misconfigured."
+        )
+        if messages and messages[0].get("role") == "system":
+            messages[0]["content"] = _ws_warn + "\n\n" + (messages[0].get("content") or "")
+        else:
+            messages.insert(0, {"role": "system", "content": _ws_warn})
+    # User pasted a literal shell command (e.g. "npx create-react-app batman").
+    # Small models answer with tutorials unless we pin execute-now at the top.
+    try:
+        from src.direct_shell import direct_shell_system_note, last_user_message
+        _user_cmd = last_user_message(messages)
+        _ds_note = direct_shell_system_note(_user_cmd)
+        if _ds_note and "bash" not in (disabled_tools or set()):
+            if messages and messages[0].get("role") == "system":
+                messages[0]["content"] = _ds_note + "\n\n" + (messages[0].get("content") or "")
+            else:
+                messages.insert(0, {"role": "system", "content": _ds_note})
+            logger.info("[direct-shell] pinned execute-now note for: %r", _user_cmd[:80])
+    except Exception:
+        pass
     if plan_mode:
         # Steer the model to investigate-then-propose. Hard tool gating handles
         # every write path except shell; this directive is what keeps the
@@ -1776,6 +1857,12 @@ async def stream_agent_loop(
         r"\b[^.\n]{0,140}",
         re.IGNORECASE,
     )
+    # Tutorial spiral: long prose + numbered steps, zero tool blocks.
+    _TUTORIAL_RE = re.compile(
+        r"\b(?:step\s*\d+|additionally|let me know if|you can verify|"
+        r"ensure that|troubleshoot|step-by-step)\b",
+        re.IGNORECASE,
+    )
     _awaiting_user = False  # set by ask_user → end the turn and wait for a choice
 
     # Document streaming state (persists across rounds)
@@ -1787,6 +1874,62 @@ async def stream_agent_loop(
     # using tools — i.e. it was cut off, not finished. Drives a "Continue" event
     # so the user can resume instead of the turn silently stalling.
     _exhausted_rounds = False
+
+    # Auto-orchestration: run direct shell commands (npm start, pwd, …) and the
+    # next unchecked shell step from an approved plan without waiting for a
+    # weak model to emit a ```bash block.
+    if session_id and "bash" not in (disabled_tools or set()) and not plan_mode:
+        try:
+            from src.direct_shell import last_user_message
+            from src.shell_orchestration import (
+                format_tool_sse,
+                run_auto_shell_if_needed,
+            )
+            _auto_user = last_user_message(messages)
+            _auto = await run_auto_shell_if_needed(
+                user_msg=_auto_user,
+                workspace=workspace,
+                approved_plan=approved_plan or "",
+                session_id=session_id,
+                owner=owner,
+            )
+            if _auto:
+                if _auto.workspace:
+                    workspace = _auto.workspace
+                _start_sse, _out_sse, _te = format_tool_sse(
+                    _auto.command, _auto.desc, _auto.result
+                )
+                yield _start_sse
+                yield _out_sse
+                tool_events.append(_te)
+                if _auto.skip_llm:
+                    full_response = _auto.assistant_message
+                    round_texts = [full_response]
+                    yield f"data: {json.dumps({'delta': full_response})}\n\n"
+                    total_duration = time.time() - total_start
+                    metrics = _compute_final_metrics(
+                        messages, full_response, total_duration, time_to_first_token,
+                        context_length, real_input_tokens, real_output_tokens,
+                        has_real_usage, tool_events, round_texts, model=actual_model,
+                        last_round_input_tokens=last_round_input_tokens,
+                        prep_timings=prep_timings,
+                        backend_gen_tps=backend_gen_tps,
+                        backend_prefill_tps=backend_prefill_tps,
+                    )
+                    metrics["requested_model"] = requested_model
+                    yield f"data: {json.dumps({'type': 'metrics', 'data': metrics})}\n\n"
+                    yield "data: [DONE]\n\n"
+                    return
+                messages.append({
+                    "role": "system",
+                    "content": (
+                        f"Auto-ran `{_auto.command}` for the active plan step. "
+                        f"Output:\n{_auto.result.get('output') or _auto.result.get('error') or '(no output)'}\n\n"
+                        "Continue with the plan — use ```update_plan``` to tick completed steps."
+                    ),
+                })
+        except Exception as _auto_shell_err:
+            logger.warning("[auto-shell] skipped: %s", _auto_shell_err)
 
     for round_num in range(1, max_rounds + 1):
         round_response = ""
@@ -2092,6 +2235,46 @@ async def stream_agent_loop(
         round_texts.append(cleaned_round)
 
         if not tool_blocks:
+            # ── False completion recovery ───────────────────────────────
+            # Local models often write "Ran `npx …`" with zero tool blocks.
+            # Detect and execute the command instead of accepting the claim.
+            try:
+                from src.plan_execution import detect_false_completion_command
+                from src.shell_orchestration import format_tool_sse, run_auto_shell_for_command
+                _fc_cmd = detect_false_completion_command(cleaned_round, approved_plan or "")
+                if (_fc_cmd and session_id and "bash" not in (disabled_tools or set())):
+                    _fc = await run_auto_shell_for_command(
+                        command=_fc_cmd,
+                        workspace=workspace,
+                        approved_plan=approved_plan or "",
+                        session_id=session_id,
+                        owner=owner,
+                    )
+                    if _fc:
+                        logger.info("[agent] false-completion recovery: auto-ran %r", _fc_cmd)
+                        if _fc.workspace:
+                            workspace = _fc.workspace
+                        _start_sse, _out_sse, _te = format_tool_sse(
+                            _fc.command, _fc.desc, _fc.result, round_num=round_num,
+                        )
+                        yield _start_sse
+                        yield _out_sse
+                        tool_events.append(_te)
+                        if _fc.result.get("bg_job_id"):
+                            break
+                        messages.append({
+                            "role": "system",
+                            "content": (
+                                f"You claimed you ran `{_fc_cmd}` but emitted no ```bash``` block. "
+                                f"Odysseus executed it:\n"
+                                f"{_fc.result.get('output') or _fc.result.get('error') or '(no output)'}\n\n"
+                                "Only mark plan steps `- [x]` after tool output confirms success."
+                            ),
+                        })
+                        continue
+            except Exception as _fc_err:
+                logger.warning("[agent] false-completion recovery failed: %s", _fc_err)
+
             # ── Completion verifier (mechanism 3a) ────────────────────
             # The model is finishing. If this was an effectful agentic turn,
             # have a fresh-context verifier independently check the work
@@ -2149,28 +2332,44 @@ async def stream_agent_loop(
             # promise: short response (<400 chars), no fenced code/answer,
             # and an action-intent phrase was matched. Long answers that
             # happen to contain "let me know" are not stalls.
-            _looks_like_promise = (
-                _intent_match is not None
-                and len(_intent_text) < 400
-                and "```" not in _intent_text
+            _looks_like_tutorial = (
+                "```" not in _intent_text
+                and len(_intent_text) > 180
+                and _TUTORIAL_RE.search(_intent_text)
                 and _intent_nudge_count < _MAX_INTENT_NUDGES
             )
+            _looks_like_promise = (
+                (
+                    _intent_match is not None
+                    and len(_intent_text) < 400
+                    and "```" not in _intent_text
+                )
+                or _looks_like_tutorial
+            ) and _intent_nudge_count < _MAX_INTENT_NUDGES
             if _looks_like_promise:
                 _intent_nudge_count += 1
-                _matched_phrase = _intent_match.group(0).strip()
+                _matched_phrase = (
+                    _intent_match.group(0).strip() if _intent_match
+                    else "a long troubleshooting tutorial"
+                )
                 logger.info(f"[agent] intent-without-action nudge #{_intent_nudge_count} on round {round_num}: {_matched_phrase!r}")
-                messages.append({
-                    "role": "system",
-                    "content": (
-                        f"You just wrote: \"{_matched_phrase}\" — but ended the "
-                        "turn without making the actual tool call. The user can "
-                        "see you announced the action but didn't run it, which "
-                        "is the most frustrating thing you can do. "
-                        "DO IT NOW: emit the actual function call this turn. "
-                        "If you decided not to do it after all, say so plainly in "
-                        "one sentence instead of restating the plan."
-                    ),
-                })
+                _nudge = (
+                    f"You just wrote: \"{_matched_phrase}\" — but ended the "
+                    "turn without making the actual tool call. The user can "
+                    "see you announced the action but didn't run it, which "
+                    "is the most frustrating thing you can do. "
+                    "DO IT NOW: emit the actual function call this turn. "
+                    "If you decided not to do it after all, say so plainly in "
+                    "one sentence instead of restating the plan."
+                )
+                if _looks_like_tutorial:
+                    _nudge = (
+                        "You wrote a tutorial instead of using tools. STOP. "
+                        "The user wants you to EXECUTE, not explain. "
+                        "Respond with ONE ```bash``` block for the next concrete "
+                        "step (or say BLOCKED in one sentence if you truly cannot)."
+                    )
+                messages.append({"role": "system", "content": _nudge})
                 # Visible signal in the stream so the user knows we caught it.
                 yield f'data: {json.dumps({"type": "agent_step", "round": round_num + 1})}\n\n'
                 continue

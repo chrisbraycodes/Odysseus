@@ -2692,8 +2692,19 @@ async function _pollTaskNotifications() {
 
 function startNotificationPolling() {
   if (_notifInterval) return;
-  _notifInterval = setInterval(_pollTaskNotifications, 30000);
+  _pollTaskNotifications();
+  _notifInterval = setInterval(() => {
+    if (typeof document !== 'undefined' && document.hidden) return;
+    _pollTaskNotifications();
+  }, 30000);
+  if (!_notifVisibilityBound) {
+    document.addEventListener('visibilitychange', () => {
+      if (!document.hidden) _pollTaskNotifications();
+    });
+    _notifVisibilityBound = true;
+  }
 }
+let _notifVisibilityBound = false;
 
 function stopNotificationPolling() {
   if (_notifInterval) {

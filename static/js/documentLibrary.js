@@ -3229,7 +3229,7 @@ let _libraryArchivedView = false;   // Documents tab showing archived docs?
           const sRes = await fetch('/api/session', { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ title: 'Untitled Document' }) });
           const sData = await sRes.json();
           const sessionId = sData.session_id;
-          await _createDocument(sessionId);
+          await _createDocument(sessionId, { fresh: true });
           // Close library and open the new session
           closeLibrary();
           if (window.sessionsModule) window.sessionsModule.loadSession(sessionId);

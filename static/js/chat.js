@@ -23,6 +23,7 @@ import * as emailInbox from './emailInbox.js';
 import codeRunnerModule from './codeRunner.js';
 import slashCommands, { initSlashCommands, isCommand, handleSlashCommand, handleSetupInput, handleSetupWizard, typewriterInto } from './slashCommands.js';
 import createResearchSynapse from './researchSynapse.js';
+import workspaceModule from './workspace.js';
 import { createStreamRenderer } from './streamingRenderer.js';
   const RESEARCH_TIMEOUT_MS = 360000;
   const DEFAULT_TIMEOUT_MS = 120000;
@@ -825,7 +826,6 @@ import { createStreamRenderer } from './streamingRenderer.js';
         fd.append('allow_bash', 'true');
       }
       // Plan mode: agent investigates read-only and proposes a plan to approve.
-      // Only meaningful in agent mode, and never alongside deep research.
       // _forcePlanOff is a one-shot set by "Approve & Run" so the execution turn
       // runs with full tools even though the Plan toggle is still on.
       const _planToggle = el('plan-toggle');
@@ -840,6 +840,14 @@ import { createStreamRenderer } from './streamingRenderer.js';
         const _sp = _getStoredPlan();
         if (_sp) fd.append('approved_plan', _sp);
       }
+      // Agent + shell: validate workspace before send; open picker if missing/invalid.
+      if (isAgentMode && el('bash-toggle').checked && !planTurn) {
+        const _wsReady = await workspaceModule.ensureWorkspaceReady();
+        if (!_wsReady) {
+          _removeThinkingSpinner();
+          return;
+        }
+      }
       const ragChk = el('rag-toggle');
       if (ragChk && !ragChk.checked) {
         fd.append('use_rag', 'false');
@@ -848,7 +856,7 @@ import { createStreamRenderer } from './streamingRenderer.js';
       if (incognitoChk && incognitoChk.checked) {
         fd.append('incognito', 'true');
       }
-      const _ws = (Storage.KEYS && Storage.get(Storage.KEYS.WORKSPACE, '')) || '';
+      const _ws = workspaceModule.getWorkspace() || (Storage.KEYS && Storage.get(Storage.KEYS.WORKSPACE, '')) || '';
       if (_ws) {
         fd.append('workspace', _ws);
       }
@@ -2301,6 +2309,17 @@ import { createStreamRenderer } from './streamingRenderer.js';
               } else if (json.type === 'ui_control') {
                 if (_isBg) continue;
                 chatStream.handleUIControl(json.data || {});
+
+              } else if (json.type === 'workspace_required') {
+                if (_isBg) continue;
+                workspaceModule.openWorkspaceBrowser();
+                if (uiModule && uiModule.showToast && json.data?.message) {
+                  uiModule.showToast(json.data.message);
+                }
+
+              } else if (json.type === 'workspace_resolved') {
+                if (_isBg) continue;
+                if (json.data?.path) workspaceModule.setWorkspace(json.data.path);
 
               } else if (json.type === 'ask_user') {
                 if (_isBg) continue;

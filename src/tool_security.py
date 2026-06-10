@@ -20,6 +20,7 @@ NON_ADMIN_BLOCKED_TOOLS = {
     "grep",
     "glob",
     "ls",
+    "delete_file",
     "search_chats",
     "manage_memory",
     "manage_skills",
@@ -99,7 +100,7 @@ PLAN_MODE_READONLY_TOOLS = {
 # here — read-only tools are covered by the allowlist. Keep in sync when adding
 # new mutating tools.
 _PLAN_MODE_KNOWN_MUTATORS = {
-    "write_file", "create_document", "edit_document", "update_document",
+    "write_file", "delete_file", "create_document", "edit_document", "update_document",
     "suggest_document", "manage_documents", "create_session", "manage_session",
     "send_to_session", "pipeline", "manage_memory", "manage_skills",
     "manage_tasks", "manage_notes", "manage_endpoints", "manage_mcp",
@@ -164,6 +165,10 @@ def is_public_blocked_tool(tool_name: Optional[str]) -> bool:
 def owner_is_admin_or_single_user(owner: Optional[str]) -> bool:
     """Return True for admins, or when auth is not configured yet."""
     try:
+        from src.auth_helpers import _auth_disabled
+
+        if _auth_disabled():
+            return True
         from core.auth import AuthManager
 
         auth = AuthManager()

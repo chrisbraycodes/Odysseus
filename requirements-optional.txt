@@ -1,3 +1,7 @@
+# Interactive workspace terminal (ConPTY on Windows). Without this, the
+# workspace panel terminal shows an install hint on Windows; POSIX uses stdlib pty.
+pywinpty; sys_platform == "win32"
+
 # Optional dependencies — install only if you use the corresponding feature.
 # The app handles their absence gracefully (clear error message on first use).
 #

@@ -279,6 +279,43 @@ def _parse_misfenced_web_lookup(content: str) -> Optional[ToolBlock]:
         return None
     return ToolBlock("web_fetch", url)
 
+
+def _parse_misfenced_update_plan(content: str) -> Optional[ToolBlock]:
+    """Recover update_plan calls wrapped in ```python fences.
+
+    Weak models write:
+
+        ```python
+        update_plan("1. npx create-react-app batman - [x]\\n2. cd batman - [ ]")
+        ```
+
+    That is a plan update, not Python code.
+    """
+    try:
+        module = ast.parse(content.strip(), mode="exec")
+    except SyntaxError:
+        return None
+    if len(module.body) != 1 or not isinstance(module.body[0], ast.Expr):
+        return None
+    call = module.body[0].value
+    if not isinstance(call, ast.Call) or not isinstance(call.func, ast.Name):
+        return None
+    if call.func.id != "update_plan":
+        return None
+
+    plan_text = None
+    if len(call.args) == 1:
+        plan_text = _literal_string(call.args[0])
+    elif call.keywords:
+        for kw in call.keywords:
+            if kw.arg == "plan":
+                plan_text = _literal_string(kw.value)
+                break
+    if not plan_text:
+        return None
+    return ToolBlock("update_plan", plan_text)
+
+
 def _parse_tool_call_block(raw: str) -> Optional[ToolBlock]:
     """Parse a [TOOL_CALL] block into a ToolBlock.
 
@@ -463,6 +500,10 @@ def parse_tool_blocks(text: str) -> List[ToolBlock]:
             continue
         if tag in ("python", "bash"):
             block = _parse_misfenced_web_lookup(content)
+            if block:
+                blocks.append(block)
+                continue
+            block = _parse_misfenced_update_plan(content)
             if block:
                 blocks.append(block)
                 continue

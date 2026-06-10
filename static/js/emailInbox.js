@@ -80,10 +80,14 @@ let _loading = false;
 let _expanded = false;
 let _docModule = null;
 let _listSpinner = null;
+let _unreadPollInterval = null;
+let _emailPollEnabled = true;
+let _eventsBound = false;
 let _senderFilter = null;       // email address (lowercased) to filter by, or null
 let _senderFilterLabel = null;  // display label for the active filter chip
 
 export function init(documentModule) {
+  if (_docModule && _eventsBound) return;
   _docModule = documentModule;
   _bindEvents();
   // Init the library popup with a callback to open emails
@@ -166,7 +170,25 @@ function _watchDocOpenToReDockEmail() {
   _docOpenObs.observe(document.body, { attributes: true, attributeFilter: ['class'] });
 }
 
+function _startUnreadPolling() {
+  if (_unreadPollInterval) return;
+  _refreshUnreadCount();
+  _unreadPollInterval = setInterval(() => {
+    if (typeof document !== 'undefined' && document.hidden) return;
+    _refreshUnreadCount();
+  }, 60000);
+  if (!_visibilityBound) {
+    document.addEventListener('visibilitychange', () => {
+      if (!document.hidden && _emailPollEnabled) _refreshUnreadCount();
+    });
+    _visibilityBound = true;
+  }
+}
+let _visibilityBound = false;
+
 function _bindEvents() {
+  if (_eventsBound) return;
+  _eventsBound = true;
   // Clicking anywhere in the email section header opens the popup
   // (except the compose button which has its own handler)
   const section = document.getElementById('email-section');
@@ -189,9 +211,7 @@ function _bindEvents() {
     });
   }
 
-  // Initial unread count check, refresh every 60s
-  _refreshUnreadCount();
-  setInterval(_refreshUnreadCount, 60000);
+  _startUnreadPolling();
   prewarmEmailLibrary({ delay: 3000 });
 
   // Deep-link: #email=<folder>:<uid> opens the library and expands that card
@@ -219,20 +239,36 @@ function _urgencyColor(score) {
 }
 
 async function _refreshUnreadCount() {
+  if (!_emailPollEnabled) return;
+  if (typeof document !== 'undefined' && document.hidden) return;
   // Default the dot to hidden — only the verified "new mail above threshold"
   // path below should turn it on. Without this, a fetch error or a backend
   // returning malformed data left a stale dot from a previous account/session.
   const dot = document.getElementById('email-unread-dot');
   if (dot && !dot._stickyState) dot.style.display = 'none';
   try {
+    const accountsRes = await fetch(`${API_BASE}/api/email/accounts`, { credentials: 'same-origin' });
+    if (!accountsRes.ok) return;
+    const accounts = await accountsRes.json().catch(() => []);
+    if (!Array.isArray(accounts) || accounts.length === 0) {
+      _emailPollEnabled = false;
+      return;
+    }
     // Parallel: unread list + urgency state.
     const [listRes, urgRes] = await Promise.all([
       fetch(`${API_BASE}/api/email/list?folder=INBOX&limit=50&filter=unread${_acct()}`),
       fetch(`${API_BASE}/api/email/urgency-state`, { credentials: 'same-origin' }).catch(() => null),
     ]);
-    if (!listRes || !listRes.ok) return;
+    if (!listRes || !listRes.ok) {
+      if (listRes && (listRes.status === 400 || listRes.status === 503)) _emailPollEnabled = false;
+      return;
+    }
     const data = await listRes.json();
     if (!dot) return;
+    if (data.error) {
+      _emailPollEnabled = false;
+      return;
+    }
 
     const emails = data.emails || [];
     if (emails.length === 0) {

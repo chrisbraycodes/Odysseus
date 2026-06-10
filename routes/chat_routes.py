@@ -39,7 +39,7 @@ from routes.chat_helpers import (
     clean_thinking_for_save,
     _enforce_chat_privileges,
 )
-from src.action_intents import classify_tool_intent as _classify_tool_intent
+from src.action_intents import classify_tool_intent as _classify_tool_intent, LIGHT_ESCALATION_CATEGORIES
 
 logger = logging.getLogger(__name__)
 
@@ -399,10 +399,15 @@ def setup_chat_routes(
         chat_mode = str(form_data.get("mode", "")).lower()  # 'chat' or 'agent'
         # Workspace: confine the agent's file/shell tools to this folder. Validate
         # it's a real directory; ignore (no confinement) otherwise.
-        workspace = (form_data.get("workspace") or "").strip()
-        if workspace:
-            _ws_real = os.path.realpath(os.path.expanduser(workspace))
-            workspace = _ws_real if os.path.isdir(_ws_real) else ""
+        _raw_workspace = (form_data.get("workspace") or "").strip()
+        from src.workspace_path import resolve_workspace_path, docker_workspace_available
+        workspace = resolve_workspace_path(_raw_workspace)
+        if _raw_workspace and not workspace:
+            logger.warning(
+                "[workspace] client sent %r but path is missing on server — "
+                "user may need to re-pick via workspace browser",
+                _raw_workspace,
+            )
         # Plan mode is a modifier on agent mode — it only makes sense with tools.
         if plan_mode:
             chat_mode = "agent"
@@ -624,7 +629,7 @@ def setup_chat_routes(
             _privs = request.app.state.auth_manager.get_privileges(_user)
         if _privs:
             if not _privs.get("can_use_bash", True):
-                disabled_tools.update({"bash", "python", "read_file", "write_file"})
+                disabled_tools.update({"bash", "python", "read_file", "write_file", "edit_file", "delete_file"})
             if not _privs.get("can_use_browser", True):
                 disabled_tools.add("builtin_browser")
             if not _privs.get("can_use_documents", True):
@@ -644,14 +649,17 @@ def setup_chat_routes(
         if _global_disabled and isinstance(_global_disabled, list):
             disabled_tools.update(_global_disabled)
 
-        # Light auto-escalation: the user is in chat mode and just expressed a
-        # notes/calendar/email intent. Grant the relevant managers but withhold
-        # the heavy "do things on the computer" tools — otherwise the model
-        # tries to shell out for a request that never needed it, then fails
-        # (and looks broken when the shell is disabled).
-        if auto_escalated:
+        # Light auto-escalation: calendar/notes/email/ui/research intents get
+        # manage_* tools but not shell/file tools. Shell/workspace intents keep
+        # full tool access so "cd …" / "delete package.json" actually work.
+        if (
+            auto_escalated
+            and _tool_intent
+            and _tool_intent.category in LIGHT_ESCALATION_CATEGORIES
+        ):
             disabled_tools.update({
-                "bash", "python", "read_file", "write_file", "builtin_browser",
+                "bash", "python", "read_file", "write_file", "edit_file",
+                "delete_file", "grep", "glob", "ls", "builtin_browser",
             })
 
         # Disable document tools in compare sessions — they break the pane UI
@@ -1037,6 +1045,30 @@ def setup_chat_routes(
                     except (TypeError, ValueError):
                         _max_rounds = _DEFAULT_ROUNDS
                     _max_rounds = max(1, min(_max_rounds, 200))
+
+                    if (
+                        not plan_mode
+                        and "bash" not in disabled_tools
+                        and docker_workspace_available()
+                        and not workspace
+                    ):
+                        _ws_msg = (
+                            "Select a workspace folder before running shell commands. "
+                            "Open the workspace picker (+ menu → Workspace, or `/workspace pick`)."
+                        )
+                        if _raw_workspace:
+                            _ws_msg = (
+                                f"The workspace path `{_raw_workspace}` is not valid on the server. "
+                                "Open the workspace picker and choose your project folder again "
+                                "(e.g. `test workspace` under Desktop)."
+                            )
+                        yield f'data: {json.dumps({"type": "workspace_required", "data": {"message": _ws_msg, "invalid": bool(_raw_workspace)}})}\n\n'
+                        yield f'data: {json.dumps({"delta": _ws_msg})}\n\n'
+                        yield "data: [DONE]\n\n"
+                        return
+
+                    if workspace and _raw_workspace and workspace != _raw_workspace:
+                        yield f'data: {json.dumps({"type": "workspace_resolved", "data": {"path": workspace, "from": _raw_workspace}})}\n\n'
 
                     async for chunk in stream_agent_loop(
                         sess.endpoint_url,
