@@ -395,9 +395,25 @@ async function _openFileAt(relPath) {
   }
 }
 
+function _ensureMobileTerminalPanel() {
+  if (document.getElementById('ws-mob-terminal-panel')) return;
+  const chat = document.getElementById('chat-container');
+  if (!chat) return;
+  const panel = document.createElement('div');
+  panel.id = 'ws-mob-terminal-panel';
+  panel.className = 'ws-mob-terminal-panel';
+  panel.innerHTML = `
+    <div class="ws-terminal-dock-header">
+      <span class="ws-terminal-dock-title">Terminal</span>
+    </div>
+    <div class="ws-terminal-mount" id="ws-mob-terminal-mount"></div>`;
+  chat.parentNode.insertBefore(panel, chat);
+}
+
 function _terminalMountEl() {
   if (_isMobileLayout()) {
-    return _pane?.querySelector('#ws-terminal-mount-mobile');
+    _ensureMobileTerminalPanel();
+    return document.getElementById('ws-mob-terminal-mount');
   }
   return _terminalDock?.querySelector('#ws-terminal-mount');
 }
@@ -407,11 +423,6 @@ function _buildPane() {
   _pane = document.createElement('div');
   _pane.id = 'ws-explorer-pane';
   _pane.className = 'ws-explorer-pane';
-  const mobileTerminal = _isMobileLayout() ? `
-    <div class="ws-explorer-section ws-explorer-terminal-section">
-      <div class="ws-explorer-section-label">Terminal</div>
-      <div class="ws-terminal-mount" id="ws-terminal-mount-mobile"></div>
-    </div>` : '';
   _pane.innerHTML = `
     <div class="ws-explorer-header">
       <span class="ws-explorer-title">Project files</span>
@@ -427,7 +438,7 @@ function _buildPane() {
       <div class="ws-explorer-section-label">Files <span class="ws-tree-path" id="ws-tree-path"></span></div>
       <div class="ws-tree-status" id="ws-tree-status" style="display:none"></div>
       <div class="ws-tree-body" id="ws-tree-body"></div>
-    </div>${mobileTerminal}`;
+    </div>`;
 
   _pane.querySelector('#ws-explorer-close').addEventListener('click', () => closePanel());
   _pane.querySelector('#ws-explorer-refresh').addEventListener('click', () => {
@@ -606,7 +617,7 @@ function _mountPane() {
 
 function _isMobileLayout() {
   try {
-    return window.matchMedia('(max-width: 768px)').matches;
+    return window.matchMedia('(max-width: 500px)').matches;
   } catch (_) {
     return false;
   }

@@ -1,0 +1,194 @@
+/* ═══════════════════════════════════════════════════════════════════
+   Mobile panel system  (wsMobilePanels.js)
+   Activates at ≤ 768 px via body.ws-mob-view
+   ═══════════════════════════════════════════════════════════════════ */
+
+@media (max-width: 768px) {
+
+  /* ── Reserve space for bottom tab bar ─────────────────────────── */
+  body.ws-mob-view {
+    padding-bottom: 56px !important;
+  }
+
+  /* ── Panel base — all managed panels need these fundamentals ───── */
+  body.ws-mob-view #chat-container,
+  body.ws-mob-view #ws-explorer-pane,
+  body.ws-mob-view #ws-workbench-column,
+  body.ws-mob-view #doc-editor-pane,
+  body.ws-mob-view #ws-mob-terminal-panel {
+    overflow: hidden;
+    min-width: 0;
+    flex-shrink: 0;
+  }
+
+  /* ── Hidden panels ─────────────────────────────────────────────── */
+  body.ws-mob-view [data-mob-hidden="1"] {
+    display: none !important;
+  }
+
+  /* ── Visual order by slot (sidebar always leftmost at order:1) ── */
+  body.ws-mob-view #sidebar          { order: 1; }
+  body.ws-mob-view [data-mob-slot="0"] { order: 2; }
+  body.ws-mob-view [data-mob-slot="1"] { order: 3; }
+  body.ws-mob-view [data-mob-slot="2"] { order: 4; }
+  body.ws-mob-view [data-mob-slot="3"] { order: 5; }
+
+  /* ── Defeat upstream ws-explorer-view fixed widths ─────────────── */
+  body.ws-mob-view.ws-explorer-view .ws-explorer-pane {
+    width: auto !important;
+    min-width: 0 !important;
+    max-width: none !important;
+    position: relative !important;
+    height: 100% !important;
+  }
+
+  body.ws-mob-view.ws-explorer-view .ws-workbench-column {
+    width: auto !important;
+    min-width: 0 !important;
+    max-width: none !important;
+  }
+
+  body.ws-mob-view.ws-explorer-view .chat-container {
+    /* Width is controlled by #ws-mob-widths <style> tag; remove conflicting rules */
+    flex-grow: 0 !important;
+    flex-shrink: 0 !important;
+    width: auto !important;
+    max-width: none !important;
+  }
+
+  /* ── File tree scrolls within its pane ─────────────────────────── */
+  body.ws-mob-view .ws-explorer-pane .ws-explorer-tree-section {
+    overflow-y: auto;
+  }
+
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   Standalone mobile terminal panel (created by workspaceExplorer.js)
+   ═══════════════════════════════════════════════════════════════════ */
+
+.ws-mob-terminal-panel {
+  display: flex;
+  flex-direction: column;
+  background: var(--bg, #111);
+  overflow: hidden;
+  min-width: 0;
+}
+
+.ws-mob-terminal-panel .ws-terminal-mount {
+  flex: 1 1 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.ws-mob-terminal-panel .ws-terminal-host {
+  height: 100%;
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   Resize handles  (fixed, repositioned by JS; one per panel gap)
+   ═══════════════════════════════════════════════════════════════════ */
+
+.ws-mob-handle {
+  display: none;             /* JS shows each handle when ≥2 panels open */
+  position: fixed;
+  top: 0;
+  bottom: 56px;              /* above tab bar */
+  width: 18px;               /* generous touch target */
+  z-index: 900;
+  cursor: col-resize;
+  align-items: center;
+  justify-content: center;
+  touch-action: none;
+  -webkit-user-select: none;
+  user-select: none;
+  transform: translateX(-50%);
+}
+
+.ws-mob-handle-bar {
+  width: 4px;
+  height: 40px;
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--fg, #fff) 18%, transparent);
+  transition: background 0.15s, height 0.15s;
+  pointer-events: none;
+}
+
+.ws-mob-handle:hover .ws-mob-handle-bar,
+.ws-mob-handle.dragging .ws-mob-handle-bar {
+  background: var(--ember, #e05f3a);
+  height: 56px;
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   Bottom tab bar
+   ═══════════════════════════════════════════════════════════════════ */
+
+.ws-mob-tabbar {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: 56px;
+  background: var(--sidebar-bg, #161616);
+  border-top: 1px solid color-mix(in srgb, var(--fg, #fff) 10%, transparent);
+  display: flex;
+  align-items: stretch;
+  z-index: 950;
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+}
+
+.ws-mob-tab {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  background: none;
+  border: none;
+  color: color-mix(in srgb, var(--fg, #fff) 38%, transparent);
+  cursor: pointer;
+  padding: 6px 4px 4px;
+  transition: color 0.15s;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+  position: relative;
+}
+
+/* Active indicator strip at top */
+.ws-mob-tab::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 15%;
+  right: 15%;
+  height: 2px;
+  border-radius: 0 0 2px 2px;
+  background: transparent;
+  transition: background 0.15s;
+}
+
+.ws-mob-tab.ws-mob-tab-active {
+  color: var(--ember, #e05f3a);
+}
+
+.ws-mob-tab.ws-mob-tab-active::before {
+  background: var(--ember, #e05f3a);
+}
+
+.ws-mob-tab:active { opacity: 0.65; }
+
+.ws-mob-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.ws-mob-label {
+  font-size: 10px;
+  font-family: var(--font-family, 'Fira Code', monospace);
+  font-weight: 500;
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+}

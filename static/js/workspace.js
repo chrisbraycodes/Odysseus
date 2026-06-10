@@ -54,7 +54,7 @@ export function syncWorkspaceIndicator(path, { displayPath = '' } = {}) {
   }
   if (name) name.textContent = path ? _basename(shown) : '';
   if (overflow) overflow.classList.toggle('active', !!path);
-  if (filesBtn) filesBtn.style.display = path ? '' : 'none';
+  if (filesBtn) filesBtn.style.display = '';
   try { document.dispatchEvent(new CustomEvent('overflow-state-change')); } catch (_) {}
 }
 
