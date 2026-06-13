@@ -755,7 +755,26 @@ def _ping_endpoint(base_url: str, api_key: str = None, timeout: float = 1.5) -> 
 
     try:
         r = httpx.get(base, headers=headers, timeout=timeout, verify=llm_verify())
-        return _result_from_response(r)
+        result = _result_from_response(r)
+        if result["reachable"]:
+            return result
+        # vLLM, llama-server, LM Studio, etc. often have no GET handler on /v1
+        # itself — only /v1/models (or /models) responds. Treat a bare 404 on
+        # the base URL as "try the models listing next", not dead.
+        if r.status_code == 404:
+            last_error = result.get("error")
+            try:
+                models_url = build_models_url(base)
+                if models_url.rstrip("/") != base.rstrip("/"):
+                    r2 = httpx.get(models_url, headers=headers, timeout=timeout, verify=llm_verify())
+                    result2 = _result_from_response(r2)
+                    if result2["reachable"]:
+                        return result2
+                    return result2
+            except Exception as e:
+                last_error = str(e)[:120]
+            return {"reachable": False, "status_code": 404, "error": last_error or "HTTP 404"}
+        return result
     except Exception as e:
         last_error = str(e)[:120]
 

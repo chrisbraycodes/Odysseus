@@ -2377,4 +2377,29 @@ def setup_cookbook_routes() -> APIRouter:
 
         return {"tasks": results}
 
+    class ActivateModelRequest(BaseModel):
+        model_id: str
+        endpoint_id: str | None = None
+        endpoint_url: str | None = None
+
+    @router.post("/api/model/activate")
+    async def model_activate(request: Request, req: ActivateModelRequest):
+        """Exclusive local model activation for the picker.
+
+        Stops other container-local cookbook serves, unloads other Ollama
+        models when applicable, and launches a saved preset if the endpoint
+        is down.
+        """
+        require_admin(request)
+        from src.model_exclusive_activate import activate_model_exclusive
+
+        result = await activate_model_exclusive(
+            req.model_id,
+            endpoint_id=req.endpoint_id,
+            endpoint_url=req.endpoint_url,
+        )
+        if not result.get("ok") and not result.get("skipped"):
+            raise HTTPException(400, result.get("error") or "Activation failed")
+        return result
+
     return router

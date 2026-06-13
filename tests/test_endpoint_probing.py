@@ -191,6 +191,22 @@ class TestPingEndpoint:
             "reachable": True, "status_code": 200, "error": None,
         }
 
+    def test_openai_compat_falls_back_to_models_on_base_404(self, monkeypatch):
+        """vLLM/LM Studio return 404 on GET /v1 but 200 on /v1/models."""
+        _patch_resolve(monkeypatch)
+
+        def fake_get(url, headers=None, timeout=None, verify=None, **kwargs):
+            if url.endswith("/v1/models"):
+                return _resp(200)
+            if url.endswith("/v1"):
+                return _resp(404)
+            return _resp(500)
+
+        monkeypatch.setattr(model_routes.httpx, "get", fake_get)
+        assert _ping_endpoint("http://localhost:8000/v1") == {
+            "reachable": True, "status_code": 200, "error": None,
+        }
+
 
 # ── Docker loopback rewrite ──
 

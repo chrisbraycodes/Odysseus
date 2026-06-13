@@ -5,6 +5,7 @@ import { providerLogo } from './providers.js';
 import uiModule from './ui.js';
 import settingsModule from './settings.js';
 import { sortModelObjects } from './modelSort.js';
+import { activateLocalModel } from './modelActivate.js';
 
 const API_BASE = window.location.origin;
 
@@ -488,6 +489,11 @@ function _initModelPickerDropdown() {
     // Broadcast immediately so listeners (e.g. the tour) can advance without
     // waiting for the async session-create/PATCH that follows.
     try { document.dispatchEvent(new CustomEvent('odysseus:model-picked', { detail: m })); } catch {}
+
+    // Local models: stop other container serves and spin up this one if needed.
+    try {
+      await activateLocalModel(m);
+    } catch (_) { /* picker still switches routing */ }
 
     // Blur search input before closing to dismiss keyboard on mobile
     if (document.activeElement) document.activeElement.blur();

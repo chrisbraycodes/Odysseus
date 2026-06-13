@@ -12,6 +12,7 @@ import spinnerModule from './spinner.js';
 import { modelColor } from './chatRenderer.js';
 import { providerLogo } from './providers.js';
 import { sortModelIds } from './modelSort.js';
+import { activateLocalModel } from './modelActivate.js';
 
 let API_BASE = '';
 let _cachedItems = []; // cached /api/models items for model-switch dropdown
@@ -75,12 +76,15 @@ function _setSortMode(mode) {
 /**
  * Build a single model row element.
  */
-function _startChat(url, mid, endpointId) {
+async function _startChat(url, mid, endpointId, displayName) {
   // Block model switching while compare mode is active
   if (window.compareModule && window.compareModule.isActive()) return;
   _trackUsage(mid);
+  try {
+    await activateLocalModel({ mid, url, endpointId, display: displayName || mid });
+  } catch (_) { /* still switch routing */ }
   if (sessionModule) {
-    sessionModule.createDirectChat(url, mid, endpointId);
+    await sessionModule.createDirectChat(url, mid, endpointId);
   } else if (uiModule) {
     uiModule.showError('Session module not loaded');
   }
@@ -141,7 +145,7 @@ function _buildModelRow(mid, url, displayName, endpointId, offline, modelType) {
   } else {
     btn.addEventListener('click', (e) => {
       e.stopPropagation();
-      _startChat(url, mid, endpointId);
+      _startChat(url, mid, endpointId, displayName);
     });
   }
 
@@ -153,7 +157,7 @@ function _buildModelRow(mid, url, displayName, endpointId, offline, modelType) {
     row.addEventListener('click', (e) => {
       if (e.target.closest('.item-drag-handle') || e.target.closest('.model-fav-btn')) return;
       if (_touchMoved) { _touchMoved = false; return; }
-      _startChat(url, mid, endpointId);
+      _startChat(url, mid, endpointId, displayName);
     });
   }
 
