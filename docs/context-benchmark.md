@@ -1,179 +1,248 @@
-# Context window benchmark — RTX 3090 eGPU deployment
+# GPU and context-window benchmarking
 
-Live benchmark results for this Odysseus install on Windows 11 with an external GPU. Use this doc to understand **how much context actually fits** when serving locally — the model card may advertise 128K, but TGI/VRAM limits are often much lower.
+How to fit a local LLM server to your GPU and tune Odysseus agent token budgets.
+Use this when the model card advertises 128K context but your serving stack (TGI,
+vLLM, llama.cpp, VRAM limits, eGPU bandwidth) caps much lower.
 
-**Benchmark date:** June 7, 2026  
-**Raw data:** [`data/max_context_sweep.json`](../data/max_context_sweep.json), [`data/context_benchmark.json`](../data/context_benchmark.json)
-
----
-
-## Hardware & software setup
-
-| Component | Configuration |
-|-----------|---------------|
-| **Host OS** | Windows 11 |
-| **GPU** | NVIDIA RTX 3090 (24 GB VRAM), eGPU over USB-C |
-| **Secondary host** | 2019 MacBook Pro (16 GB RAM) — available on the same network for remote serving if needed |
-| **Odysseus** | Docker Compose at `http://127.0.0.1:7000` |
-| **LLM server** | `F:\Github Projects\LLM-Local` — `vllm-server` container (TGI) at `http://127.0.0.1:8000` |
-| **Model** | `Qwen/Qwen2.5-Coder-7B-Instruct` |
-| **Endpoint in Odysseus** | `http://host.docker.internal:8000/v1` |
-| **Workspace mount** | `C:/Users/compc/Desktop` → `/workspace` in the Odysseus container |
-| **Agent test folder** | `C:\Users\compc\Desktop\test workspace` → `/workspace/test workspace` |
-
-### Before vs after (LLM-Local `docker-compose.yml`)
-
-| Setting | Original | Max stable (applied) |
-|---------|----------|----------------------|
-| `MAX_TOTAL_TOKENS` | 8,192 | **16,384** |
-| `MAX_INPUT_LENGTH` | 4,096 | **8,192** |
-| `MAX_BATCH_PREFILL_TOKENS` | 4,096 | **8,192** |
-
-Compose backup: `F:\Github Projects\LLM-Local\docker-compose.yml.bak-maxcontext`
+**Scripts:** `scripts/benchmark_context.py`, `scripts/find_max_context.py`  
+**Results (local, gitignored):** `data/context_benchmark.json`, `data/max_context_sweep.json`
 
 ---
 
-## How the benchmark was run
+## When to run this
 
-Two scripts in `scripts/`:
+| Symptom | Likely cause |
+|---------|----------------|
+| Agent mode goes silent on long tasks | Serving `max_total_tokens` too low for tool schemas + history |
+| Chat works, agent fails | Agent adds ~2–14K tokens of tool/system overhead |
+| OOM or container restart after raising context | VRAM limit — step down one level in the sweep |
+| Cookbook shows model “fits” but serve fails | Passthrough OK but CUDA/ROCm userspace missing — reinstall via **Cookbook → Dependencies** |
 
-1. **`find_max_context.py`** — Sweeps TGI context limits on the LLM-Local compose file, restarts `vllm-server` at each level, and checks server health, inference, GPU memory, and empirical max input via binary search.
-2. **`benchmark_context.py`** — Probes the running server’s `/info` limits and measures plain-chat vs agent-style prompt overhead.
+---
 
-```powershell
-cd odysseus
-venv\Scripts\python scripts\find_max_context.py
-venv\Scripts\python scripts\benchmark_context.py --base-url http://127.0.0.1:8000/v1 --agent-sim
+## Step 1 — Confirm GPU inside Docker
+
+Cookbook and local serve only see GPUs Docker exposes to the container.
+
+**NVIDIA:**
+
+```bash
+scripts/check-docker-gpu.sh
+# If passthrough works:
+scripts/check-docker-gpu.sh --enable-nvidia-overlay   # writes COMPOSE_FILE to .env
+docker compose up -d --build
+docker compose exec odysseus nvidia-smi -L
 ```
 
-Each sweep level was considered **stable** only if the container started, quick inference returned HTTP 200, and empirical max-input probing succeeded without OOM.
+**AMD:**
+
+```bash
+scripts/check-docker-amd-gpu.sh
+# Add COMPOSE_FILE=docker-compose.yml:docker/gpu.amd.yml and RENDER_GID to .env
+```
+
+`nvidia-smi` (or `/dev/kfd` + `/dev/dri` on AMD) inside the container confirms
+**device passthrough**, not that vLLM/llama.cpp was built with GPU support.
 
 ---
 
-## Sweep results (all levels passed)
+## Step 2 — Pick a model that fits VRAM (Cookbook)
 
-| `max_total` | `max_input` | Empirical max input | GPU used | GPU free |
-|-------------|-------------|---------------------|----------|----------|
-| 8,192 | 4,096 | 3,848 | 21,889 MiB | 2,438 MiB |
-| 9,216 | 4,608 | 4,325 | 21,844 MiB | 2,483 MiB |
-| 10,240 | 5,120 | 4,802 | 21,646 MiB | 2,681 MiB |
-| 11,264 | 5,632 | 5,280 | 21,691 MiB | 2,636 MiB |
-| 12,288 | 6,144 | 5,757 | 21,726 MiB | 2,601 MiB |
-| 14,336 | 7,168 | 6,712 | 21,042 MiB | 3,285 MiB |
-| **16,384** | **8,192** | **7,667** | **21,060 MiB** | **3,267 MiB** |
+1. Open Odysseus → **Cookbook**
+2. Let it scan hardware (VRAM, system RAM, CPU)
+3. Choose a model with a high **fit score** for your VRAM
+4. Download and **Serve** (or point Settings at an existing host endpoint)
 
-**Maximum stable configuration:** 16,384 total / 8,192 input. Levels above 16K were not tested in this sweep; ~3.3 GB VRAM remained free at 16K.
+**VRAM scaling rule of thumb** (7B instruct, FP16/BF16):
 
-> **Note:** An older comment in LLM-Local compose mentioned 12,288+ causing OOM on a prior setup. On this RTX 3090 eGPU path, 12K–16K all passed. Your mileage may vary with different eGPU enclosures, drivers, or concurrent GPU use.
+| VRAM | Typical max context (TGI/vLLM) | Notes |
+|------|-------------------------------|-------|
+| 8 GB | 4K–8K total | Tight; prefer GGUF Q4 via llama.cpp |
+| 12 GB | 8K–12K | 7B at 8K often stable |
+| 16 GB | 12K–16K | Good for coding agents |
+| 24 GB | 16K–32K+ | RTX 3090/4090 class; sweep empirically |
+| 48 GB+ | 32K+ | Scale `CANDIDATES` in `find_max_context.py` |
+
+Larger models or FP8/AWQ change these numbers — always verify with a sweep.
 
 ---
 
-## Usable token budgets (after tuning)
+## Step 3 — Probe the running server (`benchmark_context.py`)
 
-Calibrated at **9.32 chars/token** from the live server. Probes reserve **512 tokens** for the model reply.
+From repo root (venv or container with `httpx`):
 
-| Mode | Max input tokens | Practical guidance |
-|------|------------------|-------------------|
-| **Plain chat** | **~7,667** | Long conversations and large pasted context fit much better than at 8K total. |
-| **Agent (simulated preamble)** | **~4,577** user budget | After ~2,834 tokens of simulated tool/system overhead. |
-| **Odysseus agent (live)** | Works at 16K | Tool-RAG selects a subset of tools; soft-trim enforces budget. Verified with a one-word reply test. |
+```bash
+python scripts/benchmark_context.py --base-url http://127.0.0.1:8000/v1 --agent-sim
+```
 
-### Odysseus setting applied
+**Docker Odysseus → host LLM server:**
 
-In `data/settings.json`:
+```bash
+python scripts/benchmark_context.py --base-url http://host.docker.internal:8000/v1 --agent-sim
+```
+
+The script:
+
+1. Reads limits from `/info` and `/v1/models`
+2. Binary-searches the largest input that still returns HTTP 200
+3. Simulates agent system-prompt overhead
+4. Prints recommended `agent_input_token_budget` for `data/settings.json`
+
+Example output fields:
+
+- `plain_chat_max_input` — usable user tokens in Chat mode
+- `agent_user_budget` — safe user budget after tool overhead
+- `agent_input_token_budget` — value to paste into Settings
+
+---
+
+## Step 4 — Sweep context limits on your compose file (`find_max_context.py`)
+
+For **TGI / Text Generation Inference** (or any compose service with
+`MAX_TOTAL_TOKENS`, `MAX_INPUT_LENGTH`, `MAX_BATCH_PREFILL_TOKENS`), this script
+steps through candidate limits, restarts the server, checks GPU memory, and writes
+the best stable config back to your compose file (after backing it up).
+
+```bash
+python scripts/find_max_context.py --compose /path/to/your/llm-docker-compose.yml
+```
+
+**Requirements:**
+
+- `docker`, `nvidia-smi` on PATH (NVIDIA)
+- `httpx` (`pip install httpx`)
+- A running compose stack with an OpenAI-compatible server on port 8000 (adjust
+  `BASE_URL` / `CONTAINER` at the top of the script if yours differ)
+
+**Customize for your GPU** — edit `CANDIDATES` in `scripts/find_max_context.py`:
+
+```python
+# (max_total, max_input, max_batch_prefill) — stop when OOM or inference fails
+CANDIDATES = [
+    (8192, 4096, 4096),
+    (10240, 5120, 5120),
+    (12288, 6144, 6144),
+    (16384, 8192, 8192),   # common stable point on 24 GB cards
+    (20480, 10240, 10240), # try on 24 GB+ only
+    (32768, 16384, 16384), # 48 GB+ class
+]
+```
+
+**Stability criteria** (same as the reference RTX 3090 sweep):
+
+- Container starts and `/info` reports the new limits
+- Quick inference returns HTTP 200
+- `nvidia-smi` shows **≥ 2 GB VRAM free** at the chosen level
+- Empirical max-input probe succeeds without OOM
+
+Results are saved to `data/max_context_sweep.json`.
+
+> **Note:** `find_max_context.py` patches TGI-style env vars and command lines.
+> If your server uses different names, adapt `patch_compose()` or set limits
+> manually and use only `benchmark_context.py`.
+
+---
+
+## Step 5 — Apply settings in Odysseus
+
+1. **Settings → Models** — add endpoint:
+   - Host Ollama in Docker: `http://host.docker.internal:11434/v1`
+   - Host TGI/vLLM: `http://host.docker.internal:8000/v1`
+2. Set **Supports tools** per backend:
+   - Ollama / vLLM with native tool calling: `true` for Qwen2.5+
+   - TGI / older stacks: often `false` (fenced-block tools are more reliable)
+3. **Settings** or `data/settings.json`:
 
 ```json
 "agent_input_token_budget": 4577
 ```
 
-Odysseus reads TGI `/info` for `max_total_tokens` (16,384) via `src/model_context.py`, so the UI and agent loop see the real serving limit instead of the model card’s theoretical window.
+Use the value from `benchmark_context.py --agent-sim`. Odysseus reads TGI `/info`
+for `max_total_tokens` via `src/model_context.py` when available.
 
----
+4. Restart Odysseus after editing settings:
 
-## Why agent mode was tight at 8K
-
-Agent mode spends context on more than the user message:
-
-| Component | Estimated tokens |
-|-----------|------------------|
-| Full fenced-block system prompt (all tools) | ~9,667 |
-| Compact system prompt (native tool calling) | ~4,352 |
-| All 65 native tool schemas | ~13,778 |
-
-At **8,192 total tokens**, even the system prompt alone could exceed the window. At **16,384**, Odysseus can run agent mode when:
-
-- **Tool-RAG** retrieves only relevant tools (e.g. ~36 for a simple query, not all 65).
-- **Soft-trim** caps history to `agent_input_token_budget` (4,577).
-- The endpoint has **`supports_tools=true`** so Qwen2.5 uses compact prompt + native schemas.
-
-Example from a live agent turn:
-
-```
-[tool-rag] Retrieved tools for query: [... 15 extra tools ...]
-[agent] soft-trimmed context: 4944 -> 667 tokens (budget=4577, reserve=1024)
-Agent round 1: "Hello."
-```
-
-**Latency:** First agent response with many tool schemas can take several minutes over the eGPU USB-C path — separate from the context limit, but worth expecting on cold prefill.
-
----
-
-## Bottleneck summary
-
-```mermaid
-flowchart LR
-  A[User message] --> B[Odysseus agent]
-  B --> C[Tool-RAG]
-  C --> D[Soft-trim to 4577]
-  D --> E[TGI 16k window]
-  E --> F[RTX 3090 eGPU]
-  F --> G[Response]
-```
-
-1. **Serving stack cap** — TGI `max_total_tokens` (now 16,384) is the hard ceiling, not the model’s 128K card spec.
-2. **Agent tool overhead** — Largest software bottleneck; full tool list does not fit without Tool-RAG.
-3. **eGPU bandwidth** — USB-C prefill can be slow with large tool schemas.
-
----
-
-## Using agent mode on this setup (browser → files on Desktop)
-
-1. Open `http://127.0.0.1:7000`
-2. Switch to **Agent** mode (not Chat)
-3. Enable **Shell** (terminal icon in the composer — on by default in Agent mode)
-4. Set workspace: **+** menu → **Workspace** → browse starts at `/workspace` (your Desktop) → open **`test workspace`** → **Use this folder**
-   - Or slash command: `/workspace set /workspace/test workspace`
-5. **New chat**, then ask e.g. *Create a React app named my-app in this workspace*
-6. Wait for tool runs (`bash`, `npx`, etc.) — first agent turn can take 1–5 minutes on the eGPU path
-
-**Local TGI note:** disable **Supports tools** on the Qwen endpoint in Settings (fenced-block tools are more reliable than native JSON schemas on TGI/Outlines). This deployment has `supports_tools=false` on `http://host.docker.internal:8000/v1`.
-
-**Node projects on Desktop:** `/workspace` is your Desktop — files you create there are already on the host. Do not move `node_modules` across the mount (slow/brittle on Windows Docker). Scaffold in the workspace (`npx create-react-app …`) or copy source + `package.json` and run `npm install` in place.
-
-For coding tasks, keep prompts focused; history is trimmed to ~4.5K tokens for your messages
-
-Plain **Chat** mode can use roughly **7.6K tokens** of input per turn (with ~512 reserved for the reply).
-
----
-
-## Restore original LLM limits
-
-If 16K causes instability on your machine:
-
-```powershell
-Copy-Item "F:\Github Projects\LLM-Local\docker-compose.yml.bak-maxcontext" `
-          "F:\Github Projects\LLM-Local\docker-compose.yml" -Force
-docker compose -f "F:\Github Projects\LLM-Local\docker-compose.yml" restart vllm-server
-```
-
-Then lower `agent_input_token_budget` in `data/settings.json` (e.g. back to **750** for the original 8K cap) and restart Odysseus:
-
-```powershell
+```bash
 docker compose restart odysseus
 ```
 
 ---
 
-## Re-run or extend the benchmark
+## Step 6 — Verify agent + workspace
 
-To test another compose file or push beyond 16K, edit `CANDIDATES` in `scripts/find_max_context.py` and run the sweep again. Only increase limits when GPU free memory stays comfortably above ~2 GB and inference stays stable.
+1. Open `http://127.0.0.1:7000/workspace`
+2. **+ → Workspace** → pick a folder under `/workspace` (your mounted host path)
+3. Switch to **Agent** mode, enable **Shell**
+4. New chat → short test: *List files in the workspace*
+5. Confirm tool runs complete and replies arrive within expected latency
+
+**Workspace mount:** set `WORKSPACE_HOST_PATH` in `.env` before `docker compose up`.
+Inside the container, paths are always `/workspace/...` — never paste host paths
+like `C:\Users\...` into agent prompts.
+
+**Node projects:** scaffold with `npm install` / `npx` inside `/workspace` so
+`node_modules` stays on the mounted volume. Do not copy `node_modules` across
+host/container boundaries on Windows Docker.
+
+---
+
+## Reference: RTX 3090 24 GB (eGPU) example
+
+Benchmarked June 2026 with `Qwen/Qwen2.5-Coder-7B-Instruct` on TGI (`vllm-server`,
+port 8000) and Odysseus in Docker on port 7000.
+
+| Setting | Before | After sweep |
+|---------|--------|-------------|
+| `MAX_TOTAL_TOKENS` | 8,192 | **16,384** |
+| `MAX_INPUT_LENGTH` | 4,096 | **8,192** |
+| Plain chat input | ~3.8K | **~7,667** tokens |
+| Agent user budget | ~750 | **~4,577** tokens |
+| GPU used at 16K | — | ~21 GB, **~3.3 GB free** |
+
+On a **better card** (RTX 4090 24GB, 32GB+ workstation GPU), extend `CANDIDATES`
+and re-run the sweep — do not assume 16K is the ceiling.
+
+On a **smaller card** (8–12 GB), stop at the first failed level and use the
+previous candidate. Prefer smaller quantizations (GGUF Q4/Q5) via Cookbook.
+
+---
+
+## Restore previous limits
+
+If a higher context level causes instability:
+
+```bash
+cp your-compose.yml.bak-maxcontext your-compose.yml
+docker compose -f your-compose.yml restart vllm-server
+```
+
+Lower `agent_input_token_budget` in `data/settings.json` and restart Odysseus.
+
+---
+
+## Agent context overhead (why 8K total breaks agent mode)
+
+| Component | Approx. tokens |
+|-----------|----------------|
+| Full fenced-block system prompt (all tools) | ~9,700 |
+| Compact system prompt (native tool calling) | ~4,350 |
+| All native tool schemas (65 tools) | ~13,800 |
+
+At **8K total**, the system prompt alone can exceed the window. At **16K+**,
+Odysseus agent mode works when:
+
+- **Tool-RAG** retrieves only relevant tools (not all 65)
+- **Soft-trim** caps history to `agent_input_token_budget`
+- Endpoint `supports_tools` matches the backend
+
+---
+
+## Fork / PR checklist
+
+Before pushing to upstream or sharing a fork:
+
+- [ ] `WORKSPACE_HOST_PATH` uses a generic path, not a personal Desktop
+- [ ] No `data/`, `logs/`, `.env`, or benchmark JSON committed
+- [ ] No test project folders (e.g. scaffold apps) in `workspace/`
+- [ ] `docker-compose.yml` has no machine-specific bind mounts
+- [ ] GPU overlay enabled only via `.env` / documented scripts, not hardcoded

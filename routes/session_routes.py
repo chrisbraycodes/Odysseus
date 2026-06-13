@@ -694,9 +694,8 @@ def setup_session_routes(session_manager: SessionManager, config: dict, webhook_
         db = SessionLocal()
         try:
             q = db.query(DbSession).filter(DbSession.archived == True)
-            if not user:
-                raise HTTPException(403, "Authentication required")
-            q = q.filter(DbSession.owner == user)
+            if user:
+                q = q.filter(DbSession.owner == user)
             if search:
                 safe_search = search.replace('%', r'\%').replace('_', r'\_')
                 q = q.filter(DbSession.name.ilike(f"%{safe_search}%", escape='\\'))
@@ -832,9 +831,6 @@ def setup_session_routes(session_manager: SessionManager, config: dict, webhook_
     
     @router.post("/sessions/save")
     def sessions_save_now(request: Request):
-        user = effective_user(request)
-        if not user:
-            raise HTTPException(401, "Not authenticated")
         session_manager.save_sessions()
         return {"ok": True, "path": SESSIONS_FILE}
     

@@ -147,7 +147,7 @@ def setup_gallery_routes() -> APIRouter:
             img = db.query(GalleryImage).filter(GalleryImage.id == image_id).first()
             if not img:
                 raise HTTPException(404, "Image not found")
-            if not user or img.owner != user:
+            if user and img.owner and img.owner != user:
                 raise HTTPException(403, "Not your image")
 
             form = await request.form()
@@ -198,7 +198,7 @@ def setup_gallery_routes() -> APIRouter:
             img = db.query(GalleryImage).filter(GalleryImage.id == image_id).first()
             if not img:
                 raise HTTPException(404, "Image not found")
-            if not user or img.owner != user:
+            if user and img.owner and img.owner != user:
                 raise HTTPException(403, "Not your image")
             img.prompt = new_name
             db.commit()
@@ -229,7 +229,7 @@ def setup_gallery_routes() -> APIRouter:
             img = db.query(GalleryImage).filter(GalleryImage.id == image_id).first()
             if not img:
                 raise HTTPException(404, "Image not found")
-            if not user or img.owner != user:
+            if user and img.owner and img.owner != user:
                 raise HTTPException(403, "Not your image")
 
             img_path = _gallery_image_path(img.filename)
@@ -641,7 +641,7 @@ def setup_gallery_routes() -> APIRouter:
             if not row:
                 raise HTTPException(404, "Image not found")
             img, session_name = row
-            if not user or img.owner != user:
+            if user and img.owner and img.owner != user:
                 raise HTTPException(404, "Image not found")
             return _image_to_dict(img, session_name)
         finally:
@@ -656,7 +656,7 @@ def setup_gallery_routes() -> APIRouter:
             img = db.query(GalleryImage).filter(GalleryImage.id == image_id).first()
             if not img:
                 raise HTTPException(404, "Image not found")
-            if not user or img.owner != user:
+            if user and img.owner and img.owner != user:
                 raise HTTPException(404, "Image not found")
             if req.tags is not None:
                 # Drop any tag from the user-tags field that already lives in
@@ -702,8 +702,6 @@ def setup_gallery_routes() -> APIRouter:
     @router.post("/api/gallery/download-zip")
     async def gallery_download_zip(request: Request):
         user = get_current_user(request)
-        if not user:
-            raise HTTPException(401, "Not authenticated")
         try:
             data = await request.json()
         except Exception:
@@ -713,10 +711,10 @@ def setup_gallery_routes() -> APIRouter:
             raise HTTPException(400, "No images specified")
         db = SessionLocal()
         try:
-            imgs = db.query(GalleryImage).filter(
-                GalleryImage.id.in_(ids),
-                GalleryImage.owner == user,
-            ).all()
+            imgs = db.query(GalleryImage).filter(GalleryImage.id.in_(ids))
+            if user:
+                imgs = imgs.filter(GalleryImage.owner == user)
+            imgs = imgs.all()
             if not imgs:
                 raise HTTPException(404, "No images found")
             import io
@@ -847,7 +845,7 @@ def setup_gallery_routes() -> APIRouter:
             img = db.query(GalleryImage).filter(GalleryImage.id == image_id).first()
             if not img:
                 raise HTTPException(404, "Image not found")
-            if not user or img.owner != user:
+            if user and img.owner and img.owner != user:
                 raise HTTPException(404, "Image not found")
 
             img_filename = img.filename
@@ -1630,7 +1628,7 @@ def setup_gallery_routes() -> APIRouter:
         album = db.query(GalleryAlbum).filter(GalleryAlbum.id == album_id).first()
         if not album:
             raise HTTPException(404, "Album not found")
-        if not user or album.owner != user:
+        if user and album.owner and album.owner != user:
             raise HTTPException(404, "Album not found")
         return album
 
@@ -1638,7 +1636,7 @@ def setup_gallery_routes() -> APIRouter:
         img = db.query(GalleryImage).filter(GalleryImage.id == image_id).first()
         if not img:
             raise HTTPException(404, "Image not found")
-        if not user or img.owner != user:
+        if user and img.owner and img.owner != user:
             raise HTTPException(404, "Image not found")
         return img
 

@@ -19,41 +19,9 @@ services:
       # land under /app/.local for the odysseus user. Persist them so a
       # container recreate does not silently remove installed serve engines.
       - ./data/local:/app/.local:z
-      # Desktop workspace: agent file tools read/write here; changes sync live.
-      - C:/Users/compc/Desktop:/workspace:z
-      # Patched modules (until next image rebuild).
-      - ./src/model_context.py:/app/src/model_context.py:ro
-      - ./routes/session_routes.py:/app/routes/session_routes.py:ro
-      - ./src/tool_security.py:/app/src/tool_security.py:ro
-      - ./src/tool_schemas.py:/app/src/tool_schemas.py:ro
-      - ./src/agent_loop.py:/app/src/agent_loop.py:ro
-      - ./routes/workspace_routes.py:/app/routes/workspace_routes.py:ro
-      - ./static/js/workspaceExplorer.js:/app/static/js/workspaceExplorer.js:ro
-      - ./static/js/workspaceTerminal.js:/app/static/js/workspaceTerminal.js:ro
-      - ./static/lib/xterm:/app/static/lib/xterm:ro
-      - ./routes/terminal_routes.py:/app/routes/terminal_routes.py:ro
-      - ./src/terminal_manager.py:/app/src/terminal_manager.py:ro
-      - ./app.py:/app/app.py:ro
-      - ./static/js/document.js:/app/static/js/document.js:ro
-      - ./static/js/workspace.js:/app/static/js/workspace.js:ro
-      - ./static/js/research/jobs.js:/app/static/js/research/jobs.js:ro
-      - ./static/js/emailInbox.js:/app/static/js/emailInbox.js:ro
-      - ./static/js/tasks.js:/app/static/js/tasks.js:ro
-      - ./static/app.js:/app/static/app.js:ro
-      - ./static/style.css:/app/static/style.css:ro
-      - ./static/index.html:/app/static/index.html:ro
-      - ./routes/chat_routes.py:/app/routes/chat_routes.py:ro
-      - ./src/workspace_path.py:/app/src/workspace_path.py:ro
-      - ./src/tool_execution.py:/app/src/tool_execution.py:ro
-      - ./src/bg_jobs.py:/app/src/bg_jobs.py:ro
-      - ./src/bg_monitor.py:/app/src/bg_monitor.py:ro
-      - ./src/direct_shell.py:/app/src/direct_shell.py:ro
-      - ./src/action_intents.py:/app/src/action_intents.py:ro
-      - ./src/workspace_dev.py:/app/src/workspace_dev.py:ro
-      - ./src/shell_orchestration.py:/app/src/shell_orchestration.py:ro
-      - ./src/plan_execution.py:/app/src/plan_execution.py:ro
-      - ./src/tool_parsing.py:/app/src/tool_parsing.py:ro
-      - ./docker/entrypoint.sh:/usr/local/bin/entrypoint.sh:ro
+      # Workspace IDE: host folder mounted at /workspace in the container.
+      # Override with WORKSPACE_HOST_PATH in .env (e.g. your Desktop).
+      - ${WORKSPACE_HOST_PATH:-./workspace}:/workspace:z
     extra_hosts:
       # Lets the container reach local services on the Docker host, including
       # Ollama at http://host.docker.internal:11434.

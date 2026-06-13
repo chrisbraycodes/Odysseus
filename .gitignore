@@ -20,6 +20,10 @@ data/
 !services/hwfit/data/
 !services/hwfit/data/hf_models.json
 logs/
+# Default workspace mount contents (keep folder + README, ignore user projects)
+workspace/*
+!workspace/.gitkeep
+!workspace/README.md
 *.log
 *.db
 *.sqlite

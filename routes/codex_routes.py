@@ -15,7 +15,7 @@ from typing import Any
 from fastapi import APIRouter, BackgroundTasks, Body, HTTPException, Request
 from fastapi.responses import StreamingResponse
 
-from src.auth_helpers import require_user
+from src.auth_helpers import require_user, data_owner
 from src.tool_implementations import do_manage_notes
 
 
@@ -62,7 +62,8 @@ def _scope_owner(request: Request, allowed: set[str]) -> str:
         if not owner:
             raise HTTPException(403, "API token has no owner")
         return owner
-    return require_user(request)
+    owner = require_user(request)
+    return owner or data_owner(request)
 
 
 def _find_endpoint(router: APIRouter | None, method: str, path: str):

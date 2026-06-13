@@ -96,12 +96,15 @@ def setup_research_routes(research_handler, session_manager=None) -> APIRouter:
         Falls back to the on-disk JSON if the task has already finished."""
         entry = research_handler._active_tasks.get(session_id)
         if entry is not None:
+            if not user:
+                return True
             return entry.get("owner", "") == user
-        # Task no longer in memory — check the persisted JSON.
         path = Path("data/deep_research") / f"{session_id}.json"
         if not path.exists():
             return False
         try:
+            if not user:
+                return True
             return json.loads(path.read_text(encoding="utf-8")).get("owner") == user
         except Exception:
             return False
@@ -112,8 +115,7 @@ def setup_research_routes(research_handler, session_manager=None) -> APIRouter:
         user = _require_user(request)
         active = []
         for sid, entry in research_handler._active_tasks.items():
-            # SECURITY: only show this user's running tasks.
-            if entry.get("owner", "") != user:
+            if user and entry.get("owner", "") != user:
                 continue
             if entry.get("status") == "running":
                 active.append({
@@ -169,6 +171,8 @@ def setup_research_routes(research_handler, session_manager=None) -> APIRouter:
             owner = json.loads(path.read_text(encoding="utf-8")).get("owner")
         except Exception:
             raise HTTPException(404, "Research not found")
+        if not user:
+            return
         if owner != user:
             raise HTTPException(404, "Research not found")
 

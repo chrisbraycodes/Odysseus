@@ -10,12 +10,236 @@
 
 A self-hosted AI workspace -- meant to be the self-hosted version of the UI experience you get from ChatGPT and Claude. But with more jank and fun. Running on your own hardware, with your own data -- local-first, privacy-first, and no trojan.
 
+## Prometheus Source
+
+This repository is based on upstream [Odysseus](https://github.com/pewdiepie-archdaemon/odysseus). The components below are **Prometheus Source** — original work by **Christopher Bray** (YARB Industries LLC) — integrated into this deployment:
+
+| Area | What it is | Key paths |
+|------|------------|-----------|
+| **Workspace IDE** | In-browser project workspace at `/workspace`: file tree, multi-tab editor, integrated terminal (xterm.js PTY), dev-server preview, Desktop bind-mount support | `static/js/workspaceExplorer.js`, `workspaceTerminal.js`, `workspace.js`, `document.js` (workspace tabs), `routes/workspace_routes.py`, `routes/terminal_routes.py`, `src/workspace_path.py`, `src/workspace_dev.py`, `src/terminal_manager.py` |
+| **Agent workspace tooling** | Confined file/shell tools, shell orchestration, plan execution, and action intents tied to the active workspace folder | `src/tool_execution.py`, `src/shell_orchestration.py`, `src/direct_shell.py`, `src/plan_execution.py`, `src/action_intents.py`, `routes/chat_routes.py` |
+| **Windows deployment** | One-command Docker/native launchers and Docker update helper for this install | `start.bat`, `start-native.bat`, `launch-windows.ps1`, `launch-docker.ps1`, `update_windows.bat` |
+| **Local context benchmark** | GPU VRAM sweep methodology, agent token budgets, and compose tuning for any NVIDIA/AMD card | `docs/context-benchmark.md`, `scripts/find_max_context.py`, `scripts/benchmark_context.py` |
+| **Docker overrides** | Configurable `/workspace` mount, dev-preview port mapping (`WORKSPACE_HOST_PATH` in `.env`) | `docker-compose.yml`, `.env.example` |
+
+Everything else — chat, agent loop, Cookbook, Deep Research, email, calendar, memory, and the core Odysseus UI — comes from upstream Odysseus unless noted above.
+
+## AI agent setup (from source)
+
+Instructions for an AI coding agent (or a human following the same steps) to deploy
+this repo from scratch on a new machine. Work through the phases in order; do not
+skip GPU verification if local model serving is required.
+
+### Phase 0 — Preconditions
+
+| Check | Command / action |
+|-------|------------------|
+| Docker + Compose v2 | `docker compose version` |
+| Git | `git --version` |
+| NVIDIA GPU (optional) | `nvidia-smi` on the host |
+| AMD GPU (optional) | `rocm-smi` or `scripts/check-docker-amd-gpu.sh` |
+| Free disk | ≥ 20 GB for images + model cache under `./data/huggingface` |
+| Free RAM | ≥ 16 GB recommended for 7B models + agent tools |
+
+**Do not commit:** `.env`, `data/`, `logs/`, `workspace/*` project files, or
+benchmark JSON under `data/`. They are gitignored.
+
+### Phase 1 — Clone and configure
+
+```bash
+git clone https://github.com/chrisbraycodes/Odysseus.git
+cd Odysseus
+cp .env.example .env
+```
+
+Edit `.env` for your machine:
+
+```bash
+# Optional: mount your Desktop or a projects folder as /workspace in the container
+# Windows:  WORKSPACE_HOST_PATH=C:/Users/YOUR_USER/Desktop
+# Linux:    WORKSPACE_HOST_PATH=/home/YOUR_USER/projects
+# Default (works everywhere): WORKSPACE_HOST_PATH=./workspace
+```
+
+The repo ships `workspace/` as an empty default mount. Create subfolders there or
+point `WORKSPACE_HOST_PATH` at an existing directory.
+
+### Phase 2 — Start the Docker stack
+
+**Windows (recommended):** double-click or run from the repo root:
+
+```bat
+start.bat
+```
+
+`start.bat` stops any native instance on the app port, brings up the Docker stack,
+waits until the server responds, and opens your browser. Optional flags:
+
+```bat
+start.bat -Port 7001
+start.bat -NoBrowser
+```
+
+Port defaults to `APP_PORT` in `.env` (7000 if unset). Requires Docker Desktop.
+
+**All platforms (CLI):**
+
+```bash
+docker compose up -d --build
+docker compose ps
+docker compose logs --tail=80 odysseus
+```
+
+Wait until `odysseus`, `chromadb`, `searxng`, and `ntfy` are running. Open
+`http://127.0.0.1:7000/workspace` (or `http://127.0.0.1:7000`).
+
+**First login:** Odysseus prints a temporary admin password in the logs:
+
+```bash
+docker compose logs odysseus | grep -i password
+```
+
+Log in as `admin` (or `ODYSSEUS_ADMIN_USER`), then change the password in **Settings**.
+
+Optional extras (PDF viewer, Office extraction; includes AGPL PyMuPDF):
+
+```bash
+docker compose build --build-arg INSTALL_OPTIONAL=true
+docker compose up -d
+```
+
+### Phase 3 — GPU passthrough (NVIDIA or AMD)
+
+Skip if you only use cloud APIs or host Ollama outside Docker without GPU in the
+Odysseus container.
+
+**NVIDIA** — diagnose, optionally install toolkit, enable overlay:
+
+```bash
+scripts/check-docker-gpu.sh
+scripts/check-docker-gpu.sh --print-install-commands
+# When passthrough works:
+scripts/check-docker-gpu.sh --enable-nvidia-overlay
+docker compose up -d --build
+docker compose exec odysseus nvidia-smi -L
+```
+
+**AMD** — read-only diagnostic, then manual `.env`:
+
+```bash
+scripts/check-docker-amd-gpu.sh
+# Add to .env:
+# COMPOSE_FILE=docker-compose.yml:docker/gpu.amd.yml
+# RENDER_GID=<your render group id>
+```
+
+Cookbook **Dependencies** (vLLM, llama-cpp-python, etc.) still must be installed
+inside Odysseus after passthrough works — passthrough alone does not install CUDA
+userspace.
+
+### Phase 4 — Connect a language model
+
+Pick **one** path:
+
+| Path | Steps |
+|------|-------|
+| **Host Ollama** | `OLLAMA_HOST=0.0.0.0:11434 ollama serve` on host → Settings → add `http://host.docker.internal:11434/v1` |
+| **Cookbook serve** | Cookbook → scan hardware → download model → Serve → endpoint appears in Settings |
+| **External TGI/vLLM** | Run your LLM compose on host port 8000 → Settings → `http://host.docker.internal:8000/v1` |
+
+Verify chat: new session → send a short message → confirm a reply.
+
+### Phase 5 — Benchmark GPU and context limits
+
+The model card may claim 128K context; the **serving stack** and **VRAM** usually
+cap much lower. Tune before relying on Agent mode.
+
+1. **VRAM fit** — Cookbook fit score for your GPU (see [docs/context-benchmark.md](docs/context-benchmark.md))
+2. **Probe live server:**
+
+```bash
+python -m venv venv && source venv/bin/activate   # or venv\Scripts\activate on Windows
+pip install httpx
+python scripts/benchmark_context.py --base-url http://127.0.0.1:8000/v1 --agent-sim
+```
+
+3. **Sweep TGI/vLLM compose limits** (if you control the LLM `docker-compose.yml`):
+
+```bash
+python scripts/find_max_context.py --compose /path/to/your/llm-compose.yml
+```
+
+Edit `CANDIDATES` in `scripts/find_max_context.py` for your VRAM class (8 GB /
+12 GB / 24 GB / 48 GB+). Stop when inference fails or free VRAM drops below ~2 GB.
+
+4. **Apply agent budget** — copy `agent_input_token_budget` from the benchmark
+   output into **Settings** or `data/settings.json`, then:
+
+```bash
+docker compose restart odysseus
+```
+
+Full methodology, VRAM tables, RTX 3090 reference numbers, and fork checklist:
+**[docs/context-benchmark.md](docs/context-benchmark.md)**
+
+### Phase 6 — Workspace IDE smoke test
+
+1. Open `http://127.0.0.1:7000/workspace`
+2. **+ → Workspace** → select a folder under `/workspace`
+3. Confirm file tree loads; open a file in the editor
+4. Terminal panel → **Reconnect** if needed → `pwd` should be under `/workspace`
+5. Agent mode + Shell → *List files in this workspace* → confirm tool execution
+
+**Windows Docker note:** use `/workspace/...` paths in prompts, not `C:\...`.
+Scaffold Node projects inside the mount (`npx create-react-app my-app` in the
+workspace terminal) so `node_modules` stays on the volume.
+
+### Phase 7 — Fork / upstream PR hygiene
+
+Before opening a PR to [upstream Odysseus](https://github.com/pewdiepie-archdaemon/odysseus):
+
+- Remove personal paths from `docker-compose.yml` and `.env`
+- Do not include test scaffold projects (e.g. old React test apps) in `workspace/`
+- Do not commit `data/`, `logs/`, `.env`, or local benchmark artifacts
+- Keep Prometheus Source changes scoped to workspace/terminal/GPU docs — see table above
+- Run `git status --short` and confirm only intentional files are staged
+
+### Phase 8 — Native Windows (no Docker)
+
+Double-click or run:
+
+```bat
+start-native.bat
+```
+
+Optional flags:
+
+```bat
+start-native.bat -Port 7000 -BindHost 127.0.0.1
+```
+
+Equivalent PowerShell (what `start-native.bat` calls):
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\launch-windows.ps1
+```
+
+**Update an existing Docker deployment** (pull latest code, rebuild, restart):
+
+```bat
+update_windows.bat
+```
+
+Native Windows does not use the `/workspace` Docker mount; pick a workspace folder
+in the UI from any path the server can read.
+
 ## Features
   - **Chat** -- chat with any local model or API; adding them is super simple.<br>　<sub>vLLM · llama.cpp · Ollama · OpenRouter · OpenAI · GitHub Copilot</sub>
   - **Agent** -- hand it tools and let it run the whole task itself.<br>　<sub>built on [opencode](https://github.com/anomalyco/opencode) · MCP · web · files · shell · skills · memory</sub>
   - **Cookbook** -- Scans your hardware, recommends models, click to download and serve.. easy!<br>　<sub>built on [llmfit](https://github.com/AlexsJones/llmfit) · VRAM-aware · GGUF / FP8 / AWQ · fit scoring · vLLM / llama.cpp serving</sub>
   - **Deep Research** -- multi-step runs that gather, read, and synthesize sources into a nice visual report.<br>　<sub>adapted from [Tongyi DeepResearch](https://github.com/Alibaba-NLP/DeepResearch)</sub>
   - **Compare** -- a fun tool to compare models side by side. Test completely blind, no bias!<br>　<sub>multi-model · blind test · synthesis</sub>
+  - **Prometheus Source (Workspace IDE)** -- open a project folder and work in a full IDE layout: file tree, editor tabs, terminal, and live dev previews.<br>　<sub>Prometheus Source · Christopher Bray · YARB Industries LLC · `/workspace` · xterm.js · Desktop bind mount</sub>
   - **Documents** -- YOU write the text, AI is there to assist, not the opposite.<br>　<sub>multi-tab editor · markdown · HTML · CSV · syntax highlighting · AI edits · suggestions</sub>
   - **Memory / Skills** -- Persistent memory and skills, your agent evolves over time as it better understands you and your tasks!<br>　<sub>ChromaDB · fastembed (ONNX) · vector + keyword retrieval · import/export</sub>
   - **Email** -- IMAP/SMTP inbox with AI triage built in: urgency reminders, auto-tag, auto-summary, auto-reply drafts, auto-spam.<br>　<sub>IMAP · SMTP · per-account routing · CalDAV-aware</sub>
@@ -58,9 +282,13 @@ Contributing? See [CONTRIBUTING.md](CONTRIBUTING.md) for setup, testing, and
 pull request guidelines.
 
 ### Docker (recommended)
+
+**Windows:** after clone and optional `.env` setup, run `start.bat` from the repo
+folder (see [Native Windows](#native-windows) for `start-native.bat` without Docker).
+
 ```bash
-git clone https://github.com/pewdiepie-archdaemon/odysseus.git
-cd odysseus
+git clone https://github.com/chrisbraycodes/Odysseus.git
+cd Odysseus
 cp .env.example .env       # optional, but recommended for explicit defaults
 docker compose up -d --build
 ```
@@ -73,8 +301,8 @@ only when you intentionally want LAN/reverse-proxy access.
 
 ### Native Linux / macOS
 ```bash
-git clone https://github.com/pewdiepie-archdaemon/odysseus.git
-cd odysseus
+git clone https://github.com/chrisbraycodes/Odysseus.git
+cd Odysseus
 python3 -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt
@@ -91,8 +319,8 @@ Docker on macOS cannot use the Metal GPU. For GPU-accelerated Cookbook on an
 M-series Mac, run Odysseus natively:
 
 ```bash
-git clone https://github.com/pewdiepie-archdaemon/odysseus.git
-cd odysseus
+git clone https://github.com/chrisbraycodes/Odysseus.git
+cd Odysseus
 ./start-macos.sh
 ```
 
@@ -261,20 +489,47 @@ do not run on macOS. MLX-only models are not served by Odysseus.
 
 ### Native Windows
 
-**One-command launcher** (creates the venv, installs deps, runs setup, starts the
-server; safe to re-run):
+> **Prometheus Source** — `start.bat`, `start-native.bat`, `launch-windows.ps1`,
+> `launch-docker.ps1`, and `update_windows.bat` are by Christopher Bray (YARB Industries LLC).
+
+| Script | Use when |
+|--------|----------|
+| `start.bat` | **Docker (recommended on Windows)** — starts the Compose stack, waits for the server, opens the browser. Requires Docker Desktop. |
+| `start-native.bat` | **No Docker** — creates the venv, installs deps, runs setup, starts uvicorn. |
+| `update_windows.bat` | Pull latest code and rebuild/restart an existing Docker deployment. |
+
+**Docker (recommended):**
+
+```bat
+git clone https://github.com/chrisbraycodes/Odysseus.git
+cd Odysseus
+copy .env.example .env
+start.bat
+```
+
+Optional: `start.bat -Port 7001` or `start.bat -NoBrowser` (port follows `APP_PORT`
+in `.env` when omitted).
+
+**Native (no Docker):**
+
+```bat
+git clone https://github.com/chrisbraycodes/Odysseus.git
+cd Odysseus
+start-native.bat
+```
+
+Or the underlying PowerShell launcher (creates the venv, installs deps, runs setup,
+starts the server; safe to re-run):
 
 ```powershell
-git clone https://github.com/pewdiepie-archdaemon/odysseus.git
-cd odysseus
 powershell -ExecutionPolicy Bypass -File .\launch-windows.ps1
 ```
 
 Or do it by hand:
 
 ```powershell
-git clone https://github.com/pewdiepie-archdaemon/odysseus.git
-cd odysseus
+git clone https://github.com/chrisbraycodes/Odysseus.git
+cd Odysseus
 py -3.11 -m venv venv
 venv\Scripts\Activate.ps1
 pip install -r requirements.txt
@@ -296,22 +551,21 @@ Local GPU *serving* of vLLM/SGLang needs Linux/WSL2; for a local model on Window
 Open `http://localhost:7000`, log in with the generated admin password,
 and configure everything else inside **Settings**.
 
-### Local context benchmark (this deployment)
+### GPU and context benchmarking
 
-This install was benchmarked on **Windows 11 + RTX 3090 24GB (eGPU over USB-C)** with
-**Qwen2.5-Coder-7B** served by TGI (`vllm-server` on port 8000) and Odysseus in Docker
-on port 7000.
+Scripts and full methodology for fitting models to your GPU and tuning agent token
+budgets: **[docs/context-benchmark.md](docs/context-benchmark.md)**
 
-| Finding | Value |
-|---------|-------|
-| Max stable server context | **16,384** total / **8,192** input (was 8,192 / 4,096) |
-| Plain chat input | **~7,667** tokens |
-| Agent user budget | **~4,577** tokens (`agent_input_token_budget` in `data/settings.json`) |
+| Script | Purpose |
+|--------|---------|
+| `scripts/benchmark_context.py` | Probe live server limits; recommend `agent_input_token_budget` |
+| `scripts/find_max_context.py` | Sweep TGI/vLLM compose context levels against VRAM |
+| `scripts/check-docker-gpu.sh` | NVIDIA Docker passthrough diagnostic + overlay helper |
+| `scripts/check-docker-amd-gpu.sh` | AMD ROCm passthrough diagnostic |
 
-Full methodology, sweep table, agent overhead breakdown, and restore steps:
-**[docs/context-benchmark.md](docs/context-benchmark.md)**. Raw JSON:
-[`data/max_context_sweep.json`](data/max_context_sweep.json),
-[`data/context_benchmark.json`](data/context_benchmark.json).
+Results are written to `data/` (gitignored). A reference RTX 3090 24 GB sweep
+is documented in the guide; adapt `CANDIDATES` in `find_max_context.py` for
+larger or smaller GPUs.
 
 ## Troubleshooting & Advanced Setup
 
@@ -322,10 +576,10 @@ serving stack may cap context far below the model card (common with TGI `--max-t
 and VRAM limits). Odysseus probes TGI `/info` when possible; tune
 `agent_input_token_budget` in Settings or `data/settings.json`.
 
-For a worked example on this machine (RTX 3090 eGPU, Qwen2.5-Coder-7B, 16K max stable),
-see **[docs/context-benchmark.md](docs/context-benchmark.md)**. To create/edit files on your
-Desktop from the browser: Agent mode + Shell toggle + workspace under `/workspace/...`
-(see that doc’s “browser → files on Desktop” section).
+For a worked example (RTX 3090 eGPU, Qwen2.5-Coder-7B, 16K max stable),
+see **[docs/context-benchmark.md](docs/context-benchmark.md)**. Workspace files
+live under `/workspace` in Docker — set `WORKSPACE_HOST_PATH` in `.env` before
+starting Compose.
 
 ### `chromadb-client` conflicts with embedded ChromaDB
 If `chromadb-client` (the lightweight HTTP-only package) is installed alongside the full `chromadb` package, Odysseus starts but ChromaDB silently falls back to HTTP-only mode and fails.
@@ -445,6 +699,15 @@ routes/    chat, session, document, memory, model … endpoints
 services/  docs, memory, search, hwfit (Cookbook) …
 static/    index.html + app.js + style.css + js/ (modular front-end)
 docs/      landing page (index.html) + preview clips
+
+Prometheus Source (Christopher Bray · YARB Industries LLC):
+  /workspace              # Workspace IDE route
+  workspace/              # Default host mount (override via WORKSPACE_HOST_PATH)
+  routes/workspace_routes.py, routes/terminal_routes.py
+  src/workspace_path.py, workspace_dev.py, terminal_manager.py
+  static/js/workspaceExplorer.js, workspaceTerminal.js, workspace.js
+  start.bat, start-native.bat, launch-windows.ps1, launch-docker.ps1, update_windows.bat
+  docs/context-benchmark.md, scripts/benchmark_context.py, scripts/find_max_context.py
 ```
 
 ## Data

@@ -18,7 +18,7 @@ class WorkspacePathTests(unittest.TestCase):
 
     @mock.patch("src.workspace_path.docker_workspace_available", return_value=True)
     def test_windows_desktop_maps_to_workspace(self, _):
-        raw = r"C:\Users\compc\Desktop\test workspace"
+        raw = r"C:\Users\alice\Desktop\test workspace"
         expected = "/workspace/test workspace"
 
         def _isdir(p):

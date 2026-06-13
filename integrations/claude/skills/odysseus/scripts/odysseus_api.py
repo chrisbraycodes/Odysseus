@@ -33,13 +33,8 @@ def _usage() -> int:
 def _config() -> tuple[str, str] | None:
     base_url = os.environ.get("ODYSSEUS_URL", "").strip().rstrip("/")
     token = os.environ.get("ODYSSEUS_API_TOKEN", "").strip()
-    missing = []
     if not base_url:
-        missing.append("ODYSSEUS_URL")
-    if not token:
-        missing.append("ODYSSEUS_API_TOKEN")
-    if missing:
-        print(f"missing {', '.join(missing)}; create a Codex Agent token in Odysseus Settings", file=sys.stderr)
+        print("missing ODYSSEUS_URL", file=sys.stderr)
         return None
     return base_url, token
 
@@ -155,10 +150,9 @@ def main() -> int:
     base_url, token = config
 
     data = None
-    headers = {
-        "Accept": "application/json",
-        "Authorization": f"Bearer {token}",
-    }
+    headers = {"Accept": "application/json"}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
     if body is not None:
         try:
             parsed = json.loads(body)

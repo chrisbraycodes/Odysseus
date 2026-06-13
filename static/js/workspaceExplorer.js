@@ -404,7 +404,10 @@ function _ensureMobileTerminalPanel() {
   panel.className = 'ws-mob-terminal-panel';
   panel.innerHTML = `
     <div class="ws-terminal-dock-header">
-      <span class="ws-terminal-dock-title">Terminal</span>
+      <div class="ws-terminal-dock-title-row">
+        <span class="ws-terminal-dock-title">Terminal</span>
+        <span class="prometheus-source-label">PROMETHEUS SOURCE</span>
+      </div>
     </div>
     <div class="ws-terminal-mount" id="ws-mob-terminal-mount"></div>`;
   chat.parentNode.insertBefore(panel, chat);
@@ -425,7 +428,10 @@ function _buildPane() {
   _pane.className = 'ws-explorer-pane';
   _pane.innerHTML = `
     <div class="ws-explorer-header">
-      <span class="ws-explorer-title">Project files</span>
+      <div class="ws-explorer-title-row">
+        <span class="ws-explorer-title">Project files</span>
+        <span class="prometheus-source-label">PROMETHEUS SOURCE</span>
+      </div>
       <div class="ws-explorer-header-actions">
         <button type="button" class="ws-explorer-btn" id="ws-explorer-import" title="Import file from your computer">${_IMPORT_ICON}</button>
         <button type="button" class="ws-explorer-btn" id="ws-explorer-refresh" title="Refresh">↻</button>
@@ -435,7 +441,10 @@ function _buildPane() {
     <input type="file" id="ws-import-input" multiple hidden />
     <div class="ws-explorer-workspace" id="ws-explorer-workspace" title="" role="button" tabindex="0"></div>
     <div class="ws-explorer-section ws-explorer-tree-section">
-      <div class="ws-explorer-section-label">Files <span class="ws-tree-path" id="ws-tree-path"></span></div>
+      <div class="ws-explorer-section-label">
+        <span class="prometheus-source-label">PROMETHEUS SOURCE</span>
+        <span class="ws-tree-path" id="ws-tree-path"></span>
+      </div>
       <div class="ws-tree-status" id="ws-tree-status" style="display:none"></div>
       <div class="ws-tree-body" id="ws-tree-body"></div>
     </div>`;
@@ -559,7 +568,10 @@ function _ensureWorkbenchColumn() {
     _terminalDock.className = 'ws-terminal-dock';
     _terminalDock.innerHTML = `
       <div class="ws-terminal-dock-header">
-        <span class="ws-terminal-dock-title">Terminal</span>
+        <div class="ws-terminal-dock-title-row">
+          <span class="ws-terminal-dock-title">Terminal</span>
+          <span class="prometheus-source-label">PROMETHEUS SOURCE</span>
+        </div>
         <span class="ws-terminal-dock-hint" title="Interactive shell for you (not the agent). Select text to copy; Ctrl+Shift+C or Ctrl+C with selection. Paste: Ctrl+Shift+V or Ctrl+V.">Manual shell · Copy/Paste: Ctrl+C / Ctrl+V</span>
       </div>
       <div class="ws-terminal-mount" id="ws-terminal-mount"></div>`;

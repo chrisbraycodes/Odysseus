@@ -9,6 +9,24 @@ echo Starting Odysseus (Docker)
 echo =========================================
 echo.
 
+where docker >nul 2>nul
+if errorlevel 1 (
+  echo ERROR: Docker is not installed or not on PATH.
+  echo Install Docker Desktop for Windows, then run this script again.
+  echo.
+  pause
+  exit /b 1
+)
+
+docker info >nul 2>nul
+if errorlevel 1 (
+  echo ERROR: Docker Desktop does not appear to be running.
+  echo Start Docker Desktop, wait until it is ready, then run this script again.
+  echo.
+  pause
+  exit /b 1
+)
+
 powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0launch-docker.ps1" %*
 set "EXIT_CODE=%ERRORLEVEL%"
 

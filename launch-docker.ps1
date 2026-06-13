@@ -39,6 +39,136 @@ function Read-EnvPort {
     return $Default
 }
 
+function Ensure-EnvFile {
+    $envFile = Join-Path $PSScriptRoot ".env"
+    $example = Join-Path $PSScriptRoot ".env.example"
+    if (-not (Test-Path $envFile)) {
+        if (-not (Test-Path $example)) {
+            Fail "Missing .env and no .env.example to copy from."
+        }
+        Copy-Item $example $envFile
+        Write-Host "Created .env from .env.example" -ForegroundColor Yellow
+    }
+
+    $lines = @(Get-Content $envFile -ErrorAction SilentlyContinue)
+    if (-not ($lines | Where-Object { $_ -match '^\s*COMPOSE_PROJECT_NAME\s*=' })) {
+        Add-Content -Path $envFile -Value "`nCOMPOSE_PROJECT_NAME=odysseus"
+        Write-Host "Set COMPOSE_PROJECT_NAME=odysseus in .env (stable Docker project name)" -ForegroundColor Yellow
+    }
+}
+
+function Ensure-RuntimeDirs {
+    $dirs = @(
+        "data",
+        "logs",
+        "workspace",
+        "data\ssh",
+        "data\huggingface",
+        "data\local"
+    )
+    foreach ($relative in $dirs) {
+        $path = Join-Path $PSScriptRoot $relative
+        if (-not (Test-Path $path)) {
+            New-Item -ItemType Directory -Path $path -Force | Out-Null
+        }
+    }
+
+    $searxngSettings = Join-Path $PSScriptRoot "config\searxng\settings.yml"
+    if (-not (Test-Path $searxngSettings)) {
+        Fail "Missing $searxngSettings - re-clone the repo or restore config/searxng/settings.yml."
+    }
+    if ((Get-Item $searxngSettings).PSIsContainer) {
+        Fail @(
+            "$searxngSettings is a directory, not a file.",
+            "This usually means Docker created a placeholder after a bad bind mount.",
+            "Remove that folder and restore the real settings.yml from the repo."
+        ) -join [Environment]::NewLine
+    }
+}
+
+function Test-DockerReady {
+    $prevEap = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        & docker info *>&1 | Out-Null
+        return $LASTEXITCODE -eq 0
+    } finally {
+        $ErrorActionPreference = $prevEap
+    }
+}
+
+function Stop-ConflictingStackContainers {
+    param([int[]]$Ports)
+    $prevEap = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        foreach ($port in $Ports) {
+            $names = @(docker ps --format "{{.Names}}" --filter "publish=$port" 2>$null)
+            foreach ($name in $names) {
+                if ($name -match '(?i)(odysseus|searxng|chromadb|ntfy)') {
+                    Write-Host ("Stopping stale container on port {0}: {1}" -f $port, $name) -ForegroundColor Yellow
+                    docker stop $name 2>$null | Out-Null
+                }
+            }
+        }
+    } finally {
+        $ErrorActionPreference = $prevEap
+    }
+}
+
+function Get-RunningComposeServices {
+    $prevEap = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        $lines = @(docker compose ps --services --filter status=running 2>$null)
+        return @($lines | Where-Object { $_ })
+    } finally {
+        $ErrorActionPreference = $prevEap
+    }
+}
+
+function Wait-ForAllServices {
+    param(
+        [string[]]$Services,
+        [int]$TimeoutSec = 180
+    )
+    $deadline = (Get-Date).AddSeconds($TimeoutSec)
+    while ((Get-Date) -lt $deadline) {
+        $running = Get-RunningComposeServices
+        $missing = @($Services | Where-Object { $running -notcontains $_ })
+        if ($missing.Count -eq 0) { return $true }
+        Start-Sleep -Seconds 2
+    }
+    return $false
+}
+
+function Ensure-ComposeStack {
+    param([string[]]$Services)
+
+    Write-Step "Starting Docker stack (first run may take several minutes while the image builds)"
+    Invoke-DockerCompose -ComposeArgs @('up', '-d', '--build', '--remove-orphans')
+
+    if (Wait-ForAllServices -Services $Services) { return }
+
+    Write-Host ""
+    Write-Host "Some services did not start; retrying with force-recreate..." -ForegroundColor Yellow
+    Invoke-DockerCompose -ComposeArgs @('up', '-d', '--build', '--force-recreate', '--remove-orphans')
+
+    if (-not (Wait-ForAllServices -Services $Services -TimeoutSec 120)) {
+        $running = Get-RunningComposeServices
+        $missing = @($Services | Where-Object { $running -notcontains $_ })
+        Fail @(
+            "Not all Odysseus services are running.",
+            "Missing: $($missing -join ', ')",
+            "",
+            "Check logs:",
+            "  docker compose logs --tail=80 odysseus",
+            "  docker compose logs --tail=80 searxng",
+            "  docker compose ps -a"
+        ) -join [Environment]::NewLine
+    }
+}
+
 function Stop-NativeListenersOnPort {
     param([int]$TargetPort)
     try {
@@ -109,9 +239,26 @@ if (-not (Get-Command docker -ErrorAction SilentlyContinue)) {
     ) -join [Environment]::NewLine
 }
 
+if (-not (Test-DockerReady)) {
+    Fail @(
+        "Docker Desktop is not running or not ready yet.",
+        "",
+        "Start Docker Desktop, wait until it shows Running, then re-run start.bat."
+    ) -join [Environment]::NewLine
+}
+
 $composeFile = Join-Path $PSScriptRoot "docker-compose.yml"
 if (-not (Test-Path $composeFile)) {
     Fail "docker-compose.yml not found in $PSScriptRoot"
+}
+
+Ensure-EnvFile
+Ensure-RuntimeDirs
+
+$requiredServices = @('odysseus', 'chromadb', 'searxng', 'ntfy')
+$stackPorts = @(7000, 8080, 8100, 8091)
+if ($Port -gt 0 -and $Port -ne 7000) {
+    $stackPorts = @($Port) + ($stackPorts | Where-Object { $_ -ne 7000 })
 }
 
 Write-Host ""
@@ -122,18 +269,20 @@ Write-Host "=========================================" -ForegroundColor Cyan
 Write-Step "Stopping any native instance on port $Port"
 Stop-NativeListenersOnPort $Port
 
+Write-Step "Clearing stale Odysseus containers that may block ports"
+Stop-ConflictingStackContainers -Ports $stackPorts
+
 Write-Step "Restarting Odysseus container"
 try {
     Invoke-DockerCompose -Quiet -ComposeArgs @('stop', 'odysseus')
 } catch {
-    # First run — container may not exist yet; up -d will create it.
+    # First run - container may not exist yet; up -d will create it.
 }
 
-Write-Step "Starting Docker stack (this may take a minute on first run)"
 try {
-    Invoke-DockerCompose -ComposeArgs @('up', '-d', '--remove-orphans')
+    Ensure-ComposeStack -Services $requiredServices
 } catch {
-    Fail "docker compose up failed. Is Docker Desktop running?"
+    Fail "docker compose up failed. Is Docker Desktop running?`n$($_.Exception.Message)"
 }
 
 $url = "http://127.0.0.1:$Port"

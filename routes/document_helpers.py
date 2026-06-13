@@ -77,8 +77,8 @@ def _verify_doc_owner(db, doc: Document, user: str):
     openable / cloneable. We trust that column first and only fall back to
     the session join for any not-yet-backfilled legacy row.
     """
-    if user is None:
-        raise HTTPException(403, "Authentication required")
+    if not user:
+        return
     if doc.owner is not None:
         if doc.owner != user:
             raise HTTPException(404, "Document not found")
@@ -103,8 +103,8 @@ def _owner_session_filter(q, user):
     The owner backfill runs in init_db before the app serves requests, so
     by the time this filter is live there are no NULL-owner rows to leak;
     we therefore match the owner strictly."""
-    if user is None:
-        return q.filter(False)
+    if not user:
+        return q
     return q.filter(Document.owner == user)
 
 

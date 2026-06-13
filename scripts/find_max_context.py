@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
-"""Find maximum stable TGI context limits for LLM-Local (RTX 3090 / eGPU).
+"""Find maximum stable TGI/vLLM context limits for your GPU.
 
-Sweeps --max-total-tokens / --max-input-length on the vllm-server container,
-verifies each level with live inference + GPU/container health checks, then
-writes the best safe config back to LLM-Local/docker-compose.yml.
+Sweeps --max-total-tokens / --max-input-length on a docker-compose LLM service,
+verifies each level with live inference + GPU/container health checks, then writes
+the best safe config back to the compose file (backed up first).
 
-Does NOT touch the Odysseus git repo — only LLM-Local compose (backed up first).
+Does NOT modify the Odysseus git repo except writing data/max_context_sweep.json.
 
 Usage:
-  venv\\Scripts\\python scripts\\find_max_context.py
-  venv\\Scripts\\python scripts\\find_max_context.py --compose "F:\\Github Projects\\LLM-Local\\docker-compose.yml"
+  python scripts/find_max_context.py --compose ./path/to/llm-compose.yml
+  python scripts/find_max_context.py --compose ./llm-compose.yml --dry-run
 """
 
 from __future__ import annotations
@@ -31,12 +31,13 @@ except ImportError:
     print("pip install httpx", file=sys.stderr)
     sys.exit(1)
 
-DEFAULT_COMPOSE = Path(r"F:\Github Projects\LLM-Local\docker-compose.yml")
+DEFAULT_COMPOSE = Path("llm-compose.yml")
 CONTAINER = "vllm-server"
 BASE_URL = "http://127.0.0.1:8000"
 RESULTS_PATH = Path(__file__).resolve().parents[1] / "data" / "max_context_sweep.json"
 
-# Compose maintainer noted 12288+ OOM'd previously; sweep below that first.
+# (max_total, max_input, max_batch_prefill). Extend upper rows for 24GB+ GPUs;
+# stop early on OOM. See docs/context-benchmark.md for VRAM scaling guidance.
 CANDIDATES = [
     (8192, 4096, 4096),
     (9216, 4608, 4608),
@@ -233,7 +234,12 @@ def test_level(compose_path: Path, total: int, inp: int, prefill: int) -> SweepR
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--compose", type=Path, default=DEFAULT_COMPOSE)
+    parser.add_argument(
+        "--compose",
+        type=Path,
+        default=DEFAULT_COMPOSE,
+        help="Path to LLM server docker-compose.yml (default: ./llm-compose.yml)",
+    )
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
 
@@ -287,7 +293,7 @@ def main() -> int:
 
     if best:
         print("\n" + "=" * 60)
-        print("MAX STABLE CONTEXT (live-tested on your RTX 3090)")
+        print("MAX STABLE CONTEXT (live-tested on your GPU)")
         print("=" * 60)
         print(f"  max_total_tokens : {best.max_total}")
         print(f"  max_input_tokens : {best.max_input}")

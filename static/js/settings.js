@@ -19,7 +19,7 @@ function safeRasterDataUrl(raw) {
 }
 
 /* ── Tab switching ── */
-const ADMIN_TABS = new Set(['services', 'integrations', 'tools', 'users', 'system']);
+const ADMIN_TABS = new Set(['services', 'integrations', 'tools', 'system']);
 
 function initTabs() {
   modalEl.querySelectorAll('[data-settings-tab]').forEach(btn => {
@@ -1996,179 +1996,7 @@ async function initShortcuts() {
    INIT & REFRESH
    ═══════════════════════════════════════════ */
 function initAccount() {
-  // Populate user info
-  fetch('/api/auth/status', { credentials: 'same-origin' })
-    .then(r => r.json())
-    .then(d => {
-      const nameEl = el('settings-account-username');
-      const roleEl = el('settings-account-role');
-      const avatarEl = el('settings-account-avatar');
-      if (nameEl) nameEl.textContent = d.username || 'Unknown';
-      if (roleEl) roleEl.textContent = d.is_admin ? 'Admin' : 'User';
-      if (avatarEl) {
-        const initial = (d.username || '?')[0].toUpperCase();
-        avatarEl.textContent = initial;
-      }
-    }).catch(() => {});
-
-  // Change password
-  const saveBtn = el('settings-pw-save');
-  const msgEl = el('settings-pw-msg');
-  if (saveBtn) {
-    saveBtn.addEventListener('click', async () => {
-      const cur = el('settings-pw-current').value;
-      const nw = el('settings-pw-new').value;
-      const conf = el('settings-pw-confirm').value;
-      msgEl.style.color = '';
-      if (!cur || !nw) { msgEl.textContent = 'Fill in all fields'; msgEl.style.color = 'var(--red)'; return; }
-      if (nw.length < 8) { msgEl.textContent = 'Min 8 characters'; msgEl.style.color = 'var(--red)'; return; }
-      if (nw !== conf) { msgEl.textContent = 'Passwords don\'t match'; msgEl.style.color = 'var(--red)'; return; }
-      saveBtn.disabled = true;
-      try {
-        const res = await fetch('/api/auth/change-password', {
-          method: 'POST', credentials: 'same-origin',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ current_password: cur, new_password: nw })
-        });
-        if (!res.ok) { const d = await res.json(); throw new Error(d.detail || 'Failed'); }
-        msgEl.style.color = 'var(--green)';
-        msgEl.textContent = 'Password updated';
-        el('settings-pw-current').value = '';
-        el('settings-pw-new').value = '';
-        el('settings-pw-confirm').value = '';
-      } catch (e) {
-        msgEl.style.color = 'var(--red)';
-        msgEl.textContent = e.message;
-      } finally {
-        saveBtn.disabled = false;
-      }
-    });
-  }
-
-  // ── Two-Factor Authentication ──
-  const tfaContent = el('settings-2fa-content');
-  if (tfaContent) {
-    async function render2FA() {
-      try {
-        const res = await fetch('/api/auth/2fa/status', { credentials: 'same-origin' });
-        const data = await res.json();
-        if (data.enabled) {
-          // 2FA is ON — show disable option
-          tfaContent.innerHTML = `
-            <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;">
-              <span style="color:var(--color-save-green, #4caf50);font-size:12px;font-weight:600;">&#x2713; Enabled</span>
-              <span style="font-size:11px;opacity:0.5;">Authenticator app required on login</span>
-            </div>
-            <input id="tfa-disable-pw" type="password" placeholder="Enter password to disable" autocomplete="current-password" style="padding:6px 8px;background:var(--bg);border:1px solid var(--border);border-radius:4px;color:var(--fg);font-family:inherit;font-size:12px;width:100%;box-sizing:border-box;margin-bottom:6px;">
-            <div class="settings-row" style="justify-content:flex-end;">
-              <span id="tfa-msg" style="font-size:11px;margin-right:auto;"></span>
-              <button class="admin-btn-add" id="tfa-disable-btn" style="opacity:0.7;">Disable 2FA</button>
-            </div>`;
-          el('tfa-disable-btn').addEventListener('click', async () => {
-            const pw = el('tfa-disable-pw').value;
-            const msg = el('tfa-msg');
-            if (!pw) { msg.textContent = 'Enter your password'; msg.style.color = 'var(--red)'; return; }
-            try {
-              const r = await fetch('/api/auth/2fa/disable', {
-                method: 'POST', credentials: 'same-origin',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ password: pw })
-              });
-              if (!r.ok) { const d = await r.json(); throw new Error(d.detail || 'Failed'); }
-              render2FA();
-            } catch (e) { msg.textContent = e.message; msg.style.color = 'var(--red)'; }
-          });
-        } else {
-          // 2FA is OFF — show setup button
-          tfaContent.innerHTML = `
-            <div style="font-size:12px;opacity:0.6;margin-bottom:8px;">Add an extra layer of security with an authenticator app (Aegis, Google Authenticator, etc.)</div>
-            <div class="settings-row" style="justify-content:flex-end;">
-              <span id="tfa-msg" style="font-size:11px;margin-right:auto;"></span>
-              <button class="admin-btn-add" id="tfa-setup-btn">Set Up 2FA</button>
-            </div>`;
-          el('tfa-setup-btn').addEventListener('click', async () => {
-            const msg = el('tfa-msg');
-            try {
-              const r = await fetch('/api/auth/2fa/setup', { method: 'POST', credentials: 'same-origin' });
-              if (!r.ok) { const d = await r.json(); throw new Error(d.detail || 'Failed'); }
-              const setup = await r.json();
-              const qrCode = safeRasterDataUrl(setup.qr_code);
-              // Show QR code + manual secret + verify input
-              tfaContent.innerHTML = `
-                <div style="text-align:center;margin-bottom:12px;">
-                  ${qrCode ? `<img src="${esc(qrCode)}" alt="QR Code" style="border-radius:8px;max-width:200px;">` : ''}
-                </div>
-                <div style="font-size:11px;opacity:0.5;text-align:center;margin-bottom:8px;">
-                  Scan with your authenticator app, or enter manually:
-                </div>
-                <div style="font-family:monospace;font-size:12px;text-align:center;padding:6px;background:var(--bg);border:1px solid var(--border);border-radius:4px;margin-bottom:12px;word-break:break-all;user-select:all;cursor:text;">${esc(setup.secret)}</div>
-                <input id="tfa-verify-code" type="text" placeholder="Enter 6-digit code to verify" autocomplete="one-time-code" inputmode="numeric" maxlength="8" style="width:100%;padding:8px;background:var(--bg);border:1px solid var(--border);border-radius:4px;color:var(--fg);font-family:inherit;font-size:13px;box-sizing:border-box;text-align:center;letter-spacing:3px;margin-bottom:6px;">
-                <div class="settings-row" style="justify-content:flex-end;">
-                  <span id="tfa-msg" style="font-size:11px;margin-right:auto;"></span>
-                  <button class="admin-btn-add" id="tfa-cancel-btn" style="opacity:0.5;">Cancel</button>
-                  <button class="admin-btn-add" id="tfa-verify-btn">Verify & Enable</button>
-                </div>`;
-              el('tfa-verify-code').focus();
-              el('tfa-cancel-btn').addEventListener('click', () => render2FA());
-              el('tfa-verify-btn').addEventListener('click', async () => {
-                const code = el('tfa-verify-code').value.trim();
-                const vmsg = el('tfa-msg');
-                if (!code) { vmsg.textContent = 'Enter the code'; vmsg.style.color = 'var(--red)'; return; }
-                try {
-                  const vr = await fetch('/api/auth/2fa/confirm', {
-                    method: 'POST', credentials: 'same-origin',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ code })
-                  });
-                  if (!vr.ok) { const d = await vr.json(); throw new Error(d.detail || 'Invalid code'); }
-                  const result = await vr.json();
-                  // Show backup codes
-                  const codes = result.backup_codes || [];
-                  tfaContent.innerHTML = `
-                    <div style="color:var(--color-save-green, #4caf50);font-size:13px;font-weight:600;margin-bottom:8px;">&#x2713; 2FA Enabled!</div>
-                    <div style="font-size:12px;opacity:0.7;margin-bottom:8px;">Save these backup codes somewhere safe. Each can be used once if you lose your authenticator:</div>
-                    <div style="font-family:monospace;font-size:12px;padding:8px;background:var(--bg);border:1px solid var(--border);border-radius:4px;columns:2;column-gap:16px;margin-bottom:8px;">${codes.map(c => '<div style="margin-bottom:2px;">' + c + '</div>').join('')}</div>
-                    <button class="admin-btn-add" id="tfa-done-btn">Done</button>`;
-                  el('tfa-done-btn').addEventListener('click', () => render2FA());
-                } catch (e) { vmsg.textContent = e.message; vmsg.style.color = 'var(--red)'; }
-              });
-            } catch (e) { msg.textContent = e.message; msg.style.color = 'var(--red)'; }
-          });
-        }
-      } catch (_) {
-        tfaContent.innerHTML = '<div style="font-size:11px;opacity:0.4;">Could not load 2FA status</div>';
-      }
-    }
-    render2FA();
-  }
-
-  // Logout
-  const logoutBtn = el('settings-logout-btn');
-  if (logoutBtn) {
-    logoutBtn.addEventListener('mouseenter', () => { logoutBtn.style.opacity = '1'; logoutBtn.style.borderColor = 'var(--red)'; logoutBtn.style.color = 'var(--red)'; });
-    logoutBtn.addEventListener('mouseleave', () => { logoutBtn.style.opacity = ''; logoutBtn.style.borderColor = ''; logoutBtn.style.color = ''; });
-    logoutBtn.addEventListener('click', async () => {
-      try { await fetch('/api/auth/logout', { method: 'POST' }); } catch (_) {}
-      // SECURITY: wipe all client-side state on logout so the next user that
-      // signs in on this browser doesn't inherit the previous account's
-      // session id, last-used model, draft chat input, or any cached lists.
-      // Keep "odysseus-last-user" so the login form remembers the username
-      // (if "Remember me" was on). Without this the chat composer pre-loaded
-      // the previous user's last model into a fresh session, which read as
-      // cross-account leakage.
-      try {
-        const _keepKeys = new Set(['odysseus-last-user']);
-        const _toRemove = [];
-        for (let i = 0; i < localStorage.length; i++) {
-          const k = localStorage.key(i);
-          if (k && !_keepKeys.has(k)) _toRemove.push(k);
-        }
-        _toRemove.forEach(k => localStorage.removeItem(k));
-        sessionStorage.clear();
-      } catch (_) {}
-      window.location.href = '/login';
-    });
-  }
+  /* Account/auth UI removed — single-user mode */
 }
 
 function initAll() {
@@ -3233,11 +3061,10 @@ const AGENT_CONFIGS = {
     namePrefix: 'codex agent',
     defaultName: 'Codex Agent',
     pluginPath: '/api/codex/plugin.zip',
-    setupDescription: 'Downloads the plugin bundle and registers it with Codex. Sets <code>ODYSSEUS_URL</code> + <code>ODYSSEUS_API_TOKEN</code>, fetches the plugin from <a href="/api/codex/plugin.zip" style="color:var(--accent,var(--red));">this Odysseus instance</a>, and runs <code>codex plugin add odysseus@personal</code>.',
-    buildSetup: (origin, token) => `export ODYSSEUS_URL=${origin}
-export ODYSSEUS_API_TOKEN='${token}'
+    setupDescription: 'Downloads the plugin bundle and registers it with Codex. Sets <code>ODYSSEUS_URL</code>, fetches the plugin from <a href="/api/codex/plugin.zip" style="color:var(--accent,var(--red));">this Odysseus instance</a>, and runs <code>codex plugin add odysseus@personal</code>.',
+    buildSetup: (origin) => `export ODYSSEUS_URL=${origin}
 mkdir -p ~/plugins
-curl -fsSL -H "Authorization: Bearer $ODYSSEUS_API_TOKEN" "$ODYSSEUS_URL/api/codex/plugin.zip" -o /tmp/odysseus-codex-plugin.zip
+curl -fsSL "$ODYSSEUS_URL/api/codex/plugin.zip" -o /tmp/odysseus-codex-plugin.zip
 python3 -m zipfile -e /tmp/odysseus-codex-plugin.zip ~/plugins
 python3 - <<'PY'
 import json
@@ -3271,11 +3098,10 @@ python3 ~/plugins/odysseus/scripts/odysseus_api.py capabilities`,
     namePrefix: 'claude agent',
     defaultName: 'Claude Agent',
     pluginPath: '/api/claude/plugin.zip',
-    setupDescription: 'Downloads the skill bundle into <code>~/.claude/skills/odysseus/</code>. Sets <code>ODYSSEUS_URL</code> + <code>ODYSSEUS_API_TOKEN</code>, fetches the skill from <a href="/api/claude/plugin.zip" style="color:var(--accent,var(--red));">this Odysseus instance</a>. Claude Code auto-loads the skill on next start.',
-    buildSetup: (origin, token) => `export ODYSSEUS_URL=${origin}
-export ODYSSEUS_API_TOKEN='${token}'
+    setupDescription: 'Downloads the skill bundle into <code>~/.claude/skills/odysseus/</code>. Sets <code>ODYSSEUS_URL</code>, fetches the skill from <a href="/api/claude/plugin.zip" style="color:var(--accent,var(--red));">this Odysseus instance</a>. Claude Code auto-loads the skill on next start.',
+    buildSetup: (origin) => `export ODYSSEUS_URL=${origin}
 mkdir -p ~/.claude
-curl -fsSL -H "Authorization: Bearer $ODYSSEUS_API_TOKEN" "$ODYSSEUS_URL/api/claude/plugin.zip" -o /tmp/odysseus-claude-skill.zip
+curl -fsSL "$ODYSSEUS_URL/api/claude/plugin.zip" -o /tmp/odysseus-claude-skill.zip
 python3 -m zipfile -e /tmp/odysseus-claude-skill.zip ~/.claude/
 python3 ~/.claude/skills/odysseus/scripts/odysseus_api.py capabilities`,
   },
@@ -3298,7 +3124,7 @@ async function initUnifiedIntegrations() {
   }
 
   async function fetchAll() {
-    const [apiRes, calRes, cardRes, contactsRes, emailAccountsRes, mcpRes, vaultRes, tokenRes, calendarsRes] = await Promise.all([
+    const [apiRes, calRes, cardRes, contactsRes, emailAccountsRes, mcpRes, vaultRes, calendarsRes] = await Promise.all([
       fetch('/api/auth/integrations', { credentials: 'same-origin' }).then(r => r.ok ? r.json() : { integrations: [] }).catch(() => ({ integrations: [] })),
       fetch('/api/calendar/config/accounts', { credentials: 'same-origin' }).then(r => r.ok ? r.json() : { accounts: [] }).catch(() => ({ accounts: [] })),
       fetch('/api/contacts/config', { credentials: 'same-origin' }).then(r => r.ok ? r.json() : {}).catch(() => ({})),
@@ -3306,7 +3132,6 @@ async function initUnifiedIntegrations() {
       fetch('/api/email/accounts', { credentials: 'same-origin' }).then(r => r.ok ? r.json() : { accounts: [] }).catch(() => ({ accounts: [] })),
       fetch('/api/mcp/servers', { credentials: 'same-origin' }).then(r => r.ok ? r.json() : []).catch(() => []),
       fetch('/api/vault/config', { credentials: 'same-origin' }).then(r => r.ok ? r.json() : {}).catch(() => ({})),
-      fetch('/api/tokens', { credentials: 'same-origin' }).then(r => r.ok ? r.json() : []).catch(() => []),
       fetch('/api/calendar/calendars', { credentials: 'same-origin' }).then(r => r.ok ? r.json() : { calendars: [] }).catch(() => ({ calendars: [] })),
     ]);
     const items = [];
@@ -3351,20 +3176,6 @@ async function initUnifiedIntegrations() {
     for (const srv of mcpList) {
       const statusText = srv.needs_oauth ? 'needs auth' : srv.status === 'connected' ? `${srv.enabled_tool_count}/${srv.tool_count} tools` : srv.status === 'error' ? 'error' : 'disconnected';
       items.push({ type: 'mcp', id: srv.id || srv.name, name: srv.name || 'MCP Server', detail: statusText, enabled: srv.is_enabled !== false, data: srv });
-    }
-    for (const tok of (Array.isArray(tokenRes) ? tokenRes : [])) {
-      const scopes = tok.scopes || [];
-      const lowerName = (tok.name || '').toLowerCase();
-      let agentType = null;
-      if (lowerName.startsWith('claude agent')) agentType = 'claude';
-      else if (lowerName.startsWith('codex agent')) agentType = 'codex';
-      else if (scopes.some(s => String(s || '').startsWith('todos:') || String(s || '').startsWith('email:') || String(s || '').startsWith('documents:'))) {
-        // Legacy / un-prefixed scoped tokens fall back to Codex for backwards compat.
-        agentType = 'codex';
-      }
-      if (!agentType) continue;
-      const detail = `${tok.token_prefix || 'token'}... - ${scopes.join(', ') || 'chat'}`;
-      items.push({ type: agentType, id: tok.id, name: tok.name || (agentType === 'claude' ? 'Claude Agent' : 'Codex Agent'), detail, enabled: true, data: tok });
     }
     // Vaultwarden removed as an integration option.
     return items;
@@ -3438,7 +3249,7 @@ async function initUnifiedIntegrations() {
           }
           else if (type === 'email') await fetch(`/api/email/accounts/${id}`, { method: 'DELETE', credentials: 'same-origin' });
           else if (type === 'mcp') await fetch(`/api/mcp/servers/${id}`, { method: 'DELETE', credentials: 'same-origin' });
-          else if (type === 'codex' || type === 'claude') await fetch(`/api/tokens/${id}`, { method: 'DELETE', credentials: 'same-origin' });
+          else if (type === 'codex' || type === 'claude') { /* setup-only — no persisted row */ }
           else if (type === 'vault') await fetch('/api/vault/logout', { method: 'POST', credentials: 'same-origin' });
         } catch (_) {}
         formEl.style.display = 'none';
@@ -4784,112 +4595,28 @@ async function initUnifiedIntegrations() {
 
   async function showAgentForm(kind, editId) {
     const cfg = AGENT_CONFIGS[kind] || AGENT_CONFIGS.codex;
-    let tokens = [];
-    try {
-      const tokRes = await fetch('/api/tokens', { credentials: 'same-origin' });
-      if (tokRes.ok) tokens = await tokRes.json();
-    } catch (_) {}
-
-    const toolScopes = [
-      { key: 'todos:read', label: 'Todos', detail: 'Read notes and checklists' },
-      { key: 'todos:write', label: 'Todos write', detail: 'Create, update, delete, and toggle todo items' },
-      { key: 'documents:read', label: 'Documents', detail: 'Read documents when a document API is enabled' },
-      { key: 'documents:write', label: 'Documents write', detail: 'Create and update draft documents' },
-      { key: 'email:read', label: 'Email', detail: 'Read email when an email API is enabled' },
-      { key: 'email:draft', label: 'Email drafts', detail: 'Create email reply drafts without sending' },
-      { key: 'email:send', label: 'Email send', detail: 'Send email directly' },
-      { key: 'calendar:read', label: 'Calendar', detail: 'Read calendar events when enabled' },
-      { key: 'calendar:write', label: 'Calendar write', detail: 'Create and update calendar events' },
-      { key: 'memory:read', label: 'Memory', detail: 'Read memory when enabled' },
-      { key: 'memory:write', label: 'Memory write', detail: 'Write memory when enabled' },
-      { key: 'cookbook:read', label: 'Cookbook', detail: 'List cookbook tasks + tail their tmux output (debug a model serve from outside the UI)' },
-      { key: 'cookbook:launch', label: 'Cookbook launch', detail: 'Launch and stop cookbook serve tasks. Powerful: runs SSH commands on your configured servers, bounded by the same allowlist the UI uses (vllm/python3/sglang/llama-server/...)' },
-    ];
-    // Strict name-prefix match keeps Codex and Claude tokens in their own forms.
-    const agentTokens = (Array.isArray(tokens) ? tokens : []).filter(tok =>
-      (tok.name || '').toLowerCase().startsWith(cfg.namePrefix)
-    );
-    const current = agentTokens.find(t => String(t.id) === String(editId));
-    const _scopeIcons = {
-      todos: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="16" height="16" rx="2"/><line x1="8" y1="9" x2="16" y2="9"/><line x1="8" y1="13" x2="16" y2="13"/><line x1="8" y1="17" x2="13" y2="17"/></svg>',
-      documents: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>',
-      email: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="4" width="20" height="16" rx="2"/><polyline points="2 6 12 13 22 6"/></svg>',
-      calendar: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>',
-      memory: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M9.5 2a2.5 2.5 0 0 0-2.5 2.5 2.5 2.5 0 0 0-2.5 2.5A2.5 2.5 0 0 0 2 9.5v3A2.5 2.5 0 0 0 4.5 15a2.5 2.5 0 0 0 2.5 2.5A2.5 2.5 0 0 0 9.5 20H10V2z"/><path d="M14.5 2a2.5 2.5 0 0 1 2.5 2.5 2.5 2.5 0 0 1 2.5 2.5A2.5 2.5 0 0 1 22 9.5v3A2.5 2.5 0 0 1 19.5 15a2.5 2.5 0 0 1-2.5 2.5A2.5 2.5 0 0 1 14.5 20H14V2z"/></svg>',
-      cookbook: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>',
-    };
-    const _scopeNiceLabel = (label) => label.replace(/\s+(write|drafts?|send)$/i, '');
-    const _scopeAction = (key) => (key.split(':')[1] || '').toLowerCase();
-    const _pillStyle = (action) => {
-      if (action === 'read') return 'background:rgba(150,150,150,0.18);color:var(--fg-muted,#888);';
-      return 'background:color-mix(in srgb, var(--accent, var(--red)) 18%, transparent);color:var(--accent, var(--red));';
-    };
-    const scopeToggles = (t) => {
-      const scopes = new Set(t.scopes || []);
-      return toolScopes.map(scope => {
-        const tool = scope.key.split(':')[0];
-        const action = _scopeAction(scope.key);
-        const icon = _scopeIcons[tool] || '';
-        const niceLabel = _scopeNiceLabel(scope.label);
-        return `
-        <label class="settings-row" style="align-items:center;gap:8px;display:flex;min-height:30px;padding:2px 0;">
-          <span style="opacity:0.7;display:inline-flex;align-items:center;justify-content:center;width:16px;flex-shrink:0;">${icon}</span>
-          <span class="settings-label" style="width:75px;flex-shrink:0;padding:0;">${esc(niceLabel)}</span>
-          <span style="font-size:9px;font-weight:600;text-transform:uppercase;letter-spacing:0.5px;padding:1px 7px;border-radius:999px;flex-shrink:0;min-width:44px;text-align:center;margin-left:-3px;box-sizing:border-box;${_pillStyle(action)}">${esc(action)}</span>
-          <span style="font-size:11px;line-height:1.35;opacity:0.62;flex:1;min-width:0;">${esc(scope.detail)}</span>
-          <label class="admin-switch" style="margin-left:auto;flex-shrink:0;"><input type="checkbox" class="uf-codex-scope" data-token-id="${esc(t.id)}" data-scope="${esc(scope.key)}" ${scopes.has(scope.key) ? 'checked' : ''}><span class="admin-slider"></span></label>
-        </label>`;
-      }).join('');
-    };
-    const tokenRows = agentTokens.length ? agentTokens.map(t => `
-      <div class="uf-codex-token" data-token-id="${esc(t.id)}" style="border:1px solid var(--border);border-radius:6px;padding:9px 10px;margin-top:8px;">
-        <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">
-          <div style="flex:1;min-width:0;">
-            <input type="text" class="uf-codex-rename settings-input" data-token-id="${esc(t.id)}" value="${esc(t.name || cfg.defaultName)}" placeholder="${esc(cfg.defaultName)} (e.g. ${esc(cfg.word)} on laptop)" style="font-size:12px;font-weight:600;padding:3px 6px;width:100%;background:transparent;border:1px solid transparent;border-radius:4px;" title="Click to rename this agent">
-            <div style="font-size:10px;opacity:0.52;margin-top:2px;">${esc(t.token_prefix || 'token')}...${t.last_used_at ? ` · Last used ${new Date(t.last_used_at).toLocaleDateString()}` : ' · Never used'}</div>
-          </div>
-          <button class="admin-btn-sm uf-codex-copy-prefix" data-token-prefix="${esc(t.token_prefix || '')}" title="Copy token prefix (full token only shown once, at creation)" style="opacity:0.7">Copy</button>
-          <button class="admin-btn-delete uf-codex-revoke" data-token-id="${esc(t.id)}">Revoke</button>
-        </div>
-        <div style="font-size:11px;font-weight:600;opacity:0.62;margin-bottom:4px;">Tool access</div>
-        ${scopeToggles(t)}
-        <div class="uf-codex-scope-msg" data-token-id="${esc(t.id)}" style="font-size:11px;min-height:14px;"></div>
-      </div>`).join('') : `<div style="opacity:0.45;font-size:11px;padding:8px 0;">No ${esc(cfg.word)} tokens yet.</div>`;
     const origin = window.location.origin || '';
-    const setupForToken = (token) => cfg.buildSetup(origin, token);
+    const setupForOrigin = () => cfg.buildSetup(origin);
 
     formEl.innerHTML = `
       <div class="admin-card" style="margin-top:8px">
         <h2 style="font-size:13px">${esc(cfg.label)}</h2>
-        <div style="font-size:11px;opacity:0.65;line-height:1.45;margin:-2px 0 8px;">Generates a scoped token + setup commands so ${esc(cfg.word)} on your own machine can read/write your Odysseus data (todos, email, calendar, etc.). The agent runs in your terminal — it isn't streamed inside Odysseus.</div>
+        <div style="font-size:11px;opacity:0.65;line-height:1.45;margin:-2px 0 8px;">Setup commands so ${esc(cfg.word)} on your own machine can read/write your Odysseus data. The agent runs in your terminal — it isn't streamed inside Odysseus.</div>
         <div class="settings-col">
-          <div id="uf-codex-pending" style="display:${current ? 'none' : 'block'};font-size:11px;opacity:0.6;padding:6px 0;">Creating agent...</div>
-          <div id="uf-codex-reveal" style="display:none;padding:10px 12px;border:1px solid var(--border);border-left:3px solid var(--accent, var(--red));border-radius:6px;background:rgba(0,0,0,0.04);width:100%;box-sizing:border-box;">
+          <div id="uf-codex-reveal" style="display:block;padding:10px 12px;border:1px solid var(--border);border-left:3px solid var(--accent, var(--red));border-radius:6px;background:rgba(0,0,0,0.04);width:100%;box-sizing:border-box;">
             <div style="font-weight:600;font-size:12px;margin-bottom:6px;">${esc(cfg.word)} setup</div>
-
-            <div style="font-size:11px;opacity:0.62;margin-bottom:4px;">Copy this token now &mdash; it will not be shown again.</div>
-            <code id="uf-codex-token" style="display:block;word-break:break-all;font-size:11px;padding:6px 8px;background:rgba(0,0,0,0.08);border-radius:4px;"></code>
-            <div style="margin-top:6px;">
-              <button class="admin-btn-sm" id="uf-codex-copy-token">Copy token</button>
-            </div>
-
-            <div style="margin-top:14px;font-weight:600;font-size:11px;margin-bottom:4px;">Quickstart &mdash; or copy setup directly in your terminal</div>
+            <div style="font-size:11px;opacity:0.62;margin-bottom:4px;">No API token required — Odysseus runs in open single-user mode.</div>
+            <div style="margin-top:14px;font-weight:600;font-size:11px;margin-bottom:4px;">Quickstart — copy setup directly in your terminal</div>
             <div style="font-size:11px;opacity:0.62;margin-bottom:6px;">${cfg.setupDescription}</div>
             <pre style="margin:0;white-space:pre;overflow-x:auto;max-height:220px;overflow-y:auto;font-size:10px;line-height:1.45;padding:8px 10px;background:rgba(0,0,0,0.08);border-radius:4px;width:100%;box-sizing:border-box;"><code id="uf-codex-setup-code"></code></pre>
             <div style="margin-top:6px;">
               <button class="admin-btn-sm" id="uf-codex-copy-setup">Copy setup</button>
             </div>
-
-            <div style="margin-top:14px;font-weight:600;font-size:11px;margin-bottom:4px;">Configure access</div>
-            <div style="font-size:11px;opacity:0.62;margin-bottom:6px;">Toggle which Odysseus tools this agent can use. New agents start with chat only.</div>
-            <div id="uf-codex-inline-scopes"></div>
           </div>
-          <div style="font-size:11px;font-weight:600;opacity:0.62;margin-top:10px;">${agentTokens.length ? 'Existing agents' : 'Agents'}</div>
-          <div id="uf-codex-token-list">${tokenRows}</div>
           <div class="settings-row" style="margin-top:10px;align-items:center;">
             <button class="admin-btn-add" id="uf-codex-save" style="background:var(--red);border-color:var(--red);color:#fff;display:inline-flex;align-items:center;gap:5px;font-weight:600;">
               <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="20 6 9 17 4 12"/></svg>
-              Save
+              Done
             </button>
             <span id="uf-codex-msg" style="font-size:11px;flex:1;margin-left:8px"></span>
             <button class="admin-btn-add" id="uf-codex-cancel" style="opacity:0.7;display:inline-flex;align-items:center;gap:5px;position:relative;top:1px;margin-left:auto;">
@@ -4900,60 +4627,13 @@ async function initUnifiedIntegrations() {
         </div>
       </div>`;
 
-    el('uf-codex-cancel')?.addEventListener('click', () => { formEl.style.display = 'none'; });
-    el('uf-codex-save')?.addEventListener('click', () => {
-      const msg = el('uf-codex-msg');
-      if (msg) { msg.textContent = 'Saved'; msg.style.color = 'var(--green, #50fa7b)'; }
-      setTimeout(() => { formEl.style.display = 'none'; }, 350);
-    });
+    const setupCode = el('uf-codex-setup-code');
+    if (setupCode) setupCode.textContent = setupForOrigin();
 
-    const _autoCreateCodex = async () => {
-      const msg = el('uf-codex-msg');
-      const pending = el('uf-codex-pending');
-      const existingNames = new Set(agentTokens.map(t => (t.name || '').trim()));
-      let name = cfg.defaultName;
-      let n = 2;
-      while (existingNames.has(name)) { name = `${cfg.defaultName} ${n++}`; }
-      const fd = new FormData();
-      fd.append('name', name);
-      fd.append('scopes', 'chat');
-      try {
-        const r = await fetch('/api/tokens', { method: 'POST', credentials: 'same-origin', body: fd });
-        const d = await r.json();
-        if (!r.ok) throw new Error(d.detail || 'Failed');
-        if (pending) pending.style.display = 'none';
-        el('uf-codex-token').textContent = d.token || '';
-        el('uf-codex-reveal').style.display = '';
-        const setupBtn = el('uf-codex-copy-setup');
-        if (setupBtn) setupBtn.dataset.token = d.token || '';
-        const setupCode = el('uf-codex-setup-code');
-        if (setupCode) setupCode.textContent = setupForToken(d.token || '');
-        // Populate inline scope toggles for the just-created token (Configure access already open)
-        const newToken = { id: d.id, name, scopes: d.scopes || ['chat'] };
-        const inlineEl = el('uf-codex-inline-scopes');
-        if (inlineEl) {
-          inlineEl.innerHTML = `
-            <div class="uf-codex-token" data-token-id="${esc(newToken.id)}">
-              ${scopeToggles(newToken)}
-              <div class="uf-codex-scope-msg" data-token-id="${esc(newToken.id)}" style="font-size:11px;min-height:14px;"></div>
-            </div>`;
-          _wireScopeChange(inlineEl);
-        }
-        if (msg) {
-          msg.textContent = `Created "${name}".`;
-          msg.style.color = 'var(--green, #50fa7b)';
-        }
-        await renderList();
-      } catch (err) {
-        if (pending) pending.style.display = 'none';
-        if (msg) {
-          msg.textContent = err?.message || 'Failed';
-          msg.style.color = 'var(--red)';
-        }
-      }
-    };
-    if (!current) _autoCreateCodex();
-    const _copyCodexToken = async (text) => {
+    el('uf-codex-cancel')?.addEventListener('click', () => { formEl.style.display = 'none'; });
+    el('uf-codex-save')?.addEventListener('click', () => { formEl.style.display = 'none'; });
+
+    const _copyText = async (text) => {
       const value = String(text || '');
       if (!value) return false;
       if (navigator.clipboard && window.isSecureContext) {
@@ -4975,128 +4655,25 @@ async function initUnifiedIntegrations() {
       ta.remove();
       return ok;
     };
-    const _selectTextFallback = (text, containerId) => {
-      const code = document.createElement('pre');
-      code.textContent = text;
-      code.style.cssText = 'white-space:pre-wrap;word-break:break-word;font-size:10px;margin:6px 0 0;';
-      el(containerId)?.appendChild(code);
-      const range = document.createRange();
-      range.selectNodeContents(code);
-      const selection = window.getSelection();
-      selection.removeAllRanges();
-      selection.addRange(range);
-    };
+
     el('uf-codex-copy-setup')?.addEventListener('click', async () => {
-      const token = el('uf-codex-copy-setup')?.dataset.token || '';
+      const setup = setupForOrigin();
       const btn = el('uf-codex-copy-setup');
-      if (!token) {
-        if (btn) {
-          btn.textContent = 'Add agent first';
-          setTimeout(() => { const latest = el('uf-codex-copy-setup'); if (latest) latest.textContent = 'Copy setup'; }, 1600);
-        }
-        return;
-      }
-      const setup = setupForToken(token);
-      const ok = await _copyCodexToken(setup);
+      const ok = await _copyText(setup);
       if (!btn) return;
       btn.textContent = ok ? 'Copied setup' : 'Select setup';
-      if (!ok) _selectTextFallback(setup, 'uf-codex-reveal');
+      if (!ok) {
+        const code = el('uf-codex-setup-code');
+        if (code) {
+          const range = document.createRange();
+          range.selectNodeContents(code);
+          const selection = window.getSelection();
+          selection.removeAllRanges();
+          selection.addRange(range);
+        }
+      }
       setTimeout(() => { const latest = el('uf-codex-copy-setup'); if (latest) latest.textContent = 'Copy setup'; }, 1600);
     });
-    el('uf-codex-copy-token')?.addEventListener('click', async () => {
-      const token = el('uf-codex-token')?.textContent || '';
-      const ok = await _copyCodexToken(token);
-      const btn = el('uf-codex-copy-token');
-      if (!btn) return;
-      btn.textContent = ok ? 'Copied token' : 'Select token';
-      if (!ok) _selectTextFallback(token, 'uf-codex-reveal');
-      setTimeout(() => { const latest = el('uf-codex-copy-token'); if (latest) latest.textContent = 'Copy token'; }, 1600);
-    });
-    formEl.querySelectorAll('.uf-codex-revoke').forEach(btn => {
-      btn.addEventListener('click', async () => {
-        if (!await window.styledConfirm(`Revoke this ${cfg.word} token? Terminal agents using it will lose access.`, { confirmText: 'Revoke', danger: true })) return;
-        await fetch(`/api/tokens/${btn.dataset.tokenId}`, { method: 'DELETE', credentials: 'same-origin' });
-        formEl.style.display = 'none';
-        await renderList();
-      });
-    });
-    // Rename: PATCH the token's name when the user blurs the input (or hits Enter).
-    formEl.querySelectorAll('.uf-codex-rename').forEach(input => {
-      const original = input.value;
-      const commit = async () => {
-        const name = (input.value || '').trim();
-        if (!name || name === original) return;
-        try {
-          const r = await fetch(`/api/tokens/${input.dataset.tokenId}`, {
-            method: 'PATCH',
-            credentials: 'same-origin',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ name }),
-          });
-          if (!r.ok) throw new Error('Save failed');
-          input.style.borderColor = 'var(--green, #50fa7b)';
-          setTimeout(() => { input.style.borderColor = 'transparent'; }, 800);
-          await renderList();
-        } catch (_) {
-          input.value = original;
-          input.style.borderColor = 'var(--red)';
-          setTimeout(() => { input.style.borderColor = 'transparent'; }, 1200);
-        }
-      };
-      input.addEventListener('blur', commit);
-      input.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); input.blur(); } });
-    });
-    // Copy token prefix (full token irrecoverable after the one-time creation reveal).
-    formEl.querySelectorAll('.uf-codex-copy-prefix').forEach(btn => {
-      btn.addEventListener('click', async () => {
-        const prefix = btn.dataset.tokenPrefix || '';
-        if (!prefix) return;
-        try {
-          if (navigator.clipboard && window.isSecureContext) {
-            await navigator.clipboard.writeText(prefix);
-          } else {
-            const ta = document.createElement('textarea');
-            ta.value = prefix;
-            ta.style.cssText = 'position:fixed;left:0;top:0;width:1px;height:1px;opacity:0;';
-            document.body.appendChild(ta);
-            ta.select();
-            try { document.execCommand('copy'); } catch (_) {}
-            ta.remove();
-          }
-          const label = btn.textContent;
-          btn.textContent = 'Copied prefix';
-          setTimeout(() => { btn.textContent = label; }, 1400);
-        } catch (_) {}
-      });
-    });
-    function _wireScopeChange(scope) {
-      scope.querySelectorAll('.uf-codex-scope').forEach(cb => {
-        if (cb.dataset.wired === '1') return;
-        cb.dataset.wired = '1';
-        cb.addEventListener('change', async () => {
-          const tokenId = cb.dataset.tokenId;
-          const panel = formEl.querySelector(`.uf-codex-token[data-token-id="${CSS.escape(tokenId)}"]`);
-          const msg = formEl.querySelector(`.uf-codex-scope-msg[data-token-id="${CSS.escape(tokenId)}"]`);
-          const scopes = Array.from(panel.querySelectorAll('.uf-codex-scope:checked')).map(input => input.dataset.scope);
-          try {
-            const r = await fetch(`/api/tokens/${tokenId}`, {
-              method: 'PATCH',
-              credentials: 'same-origin',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ scopes }),
-            });
-            const d = await r.json().catch(() => ({}));
-            if (!r.ok) throw new Error(d.detail || 'Failed');
-            if (msg) { msg.textContent = 'Saved'; msg.style.color = 'var(--green, #50fa7b)'; }
-            await renderList();
-          } catch (err) {
-            cb.checked = !cb.checked;
-            if (msg) { msg.textContent = err?.message || 'Failed'; msg.style.color = 'var(--red)'; }
-          }
-        });
-      });
-    }
-    _wireScopeChange(formEl);
   }
 
   // ── Add button with type picker ──
@@ -5175,9 +4752,8 @@ async function initUnifiedIntegrations() {
 /* ── Admin visibility sync ── */
 function syncAdminVisibility() {
   if (!modalEl) return;
-  const isAdmin = !!window._isAdmin;
   modalEl.querySelectorAll('.admin-only').forEach(el => {
-    el.style.display = isAdmin ? '' : 'none';
+    el.style.display = '';
   });
 }
 

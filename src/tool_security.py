@@ -163,21 +163,8 @@ def is_public_blocked_tool(tool_name: Optional[str]) -> bool:
 
 
 def owner_is_admin_or_single_user(owner: Optional[str]) -> bool:
-    """Return True for admins, or when auth is not configured yet."""
-    try:
-        from src.auth_helpers import _auth_disabled
-
-        if _auth_disabled():
-            return True
-        from core.auth import AuthManager
-
-        auth = AuthManager()
-        if not auth.is_configured:
-            return True
-        return bool(owner and auth.is_admin(owner))
-    except Exception as exc:
-        logger.warning("Unable to evaluate owner admin status: %s", exc)
-        return False
+    """Single-user mode — all owners have full access."""
+    return True
 
 
 def blocked_tools_for_owner(owner: Optional[str]) -> Set[str]:

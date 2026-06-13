@@ -36487,6 +36487,56 @@ body.theme-frosted .modal {
 .ask-user-other-send { flex-shrink: 0; white-space: nowrap; min-height: 39px; }
 .ask-user-other-send:disabled { opacity: 0.5; cursor: default; }
 
+/* ---- Prometheus Source branding (workspace IDE) ---- */
+.prometheus-source-label {
+  color: var(--prometheus-green, var(--green, #50fa7b));
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  flex-shrink: 0;
+  opacity: 1;
+  font-family: ui-monospace, 'Cascadia Code', 'Consolas', monospace;
+  white-space: nowrap;
+}
+.ws-explorer-title-row,
+.ws-terminal-dock-title-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+body:not(.ws-explorer-view) .ws-only-prometheus-label {
+  display: none;
+}
+body.ws-explorer-view #doc-actions-footer .prometheus-source-label {
+  margin-left: auto;
+  margin-right: 10px;
+}
+body.ws-explorer-view #doc-actions-footer .email-send-split {
+  margin-left: 0;
+}
+body.ws-explorer-view #doc-actions-footer .email-send-btn {
+  background: color-mix(in srgb, var(--prometheus-green, var(--green, #50fa7b)) 18%, transparent);
+  color: var(--prometheus-green, var(--green, #50fa7b));
+  border-color: color-mix(in srgb, var(--prometheus-green, var(--green, #50fa7b)) 45%, transparent);
+}
+body.ws-explorer-view #doc-actions-footer .email-send-btn:hover {
+  background: color-mix(in srgb, var(--prometheus-green, var(--green, #50fa7b)) 28%, transparent);
+  border-color: var(--prometheus-green, var(--green, #50fa7b));
+}
+body.ws-explorer-view #doc-actions-footer .email-send-split .email-send-caret {
+  border-left-color: color-mix(in srgb, var(--prometheus-green, var(--green, #50fa7b)) 45%, transparent);
+}
+body.ws-explorer-view .ws-explorer-section-label .prometheus-source-label {
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  opacity: 1;
+}
+body.ws-explorer-view .ws-explorer-section-label {
+  opacity: 1;
+}
+
 /* ---- Workspace project explorer (file tree + editor) ---- */
 body.ws-explorer-view .ws-explorer-pane {
   flex: 0 0 min(340px, 42vw);
@@ -36537,8 +36587,11 @@ body.ws-explorer-view .ws-terminal-dock-header {
   font-size: 11px;
   font-weight: 600;
   letter-spacing: 0.03em;
-  opacity: 0.7;
+  opacity: 1;
   border-bottom: 1px solid var(--border);
+}
+body.ws-explorer-view .ws-terminal-dock-header .prometheus-source-label {
+  opacity: 1;
 }
 body.ws-explorer-view .ws-terminal-dock-hint {
   font-weight: 400;

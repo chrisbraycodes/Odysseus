@@ -335,7 +335,7 @@ export function createWorkspaceTerminal(mountEl, opts) {
       } else if (ev.code === 4503) {
         setStatus(reason || 'Install pywinpty: pip install pywinpty', 'error');
       } else if (ev.code === 4401) {
-        setStatus('Not authenticated — refresh and log in', 'error');
+        setStatus('Terminal connection rejected — refresh the page', 'error');
       } else if (ev.code !== 1000) {
         setStatus(reason, 'error');
       } else {

@@ -10,9 +10,6 @@ import uuid
 from typing import Optional
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Query
-
-from core.auth import AuthManager
-from routes.auth_routes import SESSION_COOKIE
 from src.terminal_manager import (
     pty_available,
     pty_unavailable_reason,
@@ -22,10 +19,6 @@ from src.tool_security import owner_is_admin_or_single_user
 from src.workspace_path import resolve_workspace_path
 
 logger = logging.getLogger(__name__)
-
-
-def _auth_disabled() -> bool:
-    return os.getenv("AUTH_ENABLED", "true").lower() == "false"
 
 
 def _resolve_terminal_cwd(workspace: str) -> str:
@@ -38,16 +31,9 @@ def _resolve_terminal_cwd(workspace: str) -> str:
     return resolved
 
 
-def _authenticate_ws(websocket: WebSocket, auth_manager: Optional[AuthManager]) -> Optional[str]:
-    """Return username (or '' for auth-disabled). None = reject."""
-    if _auth_disabled():
-        return ""
-    if not auth_manager or not auth_manager.is_configured:
-        return None
-    token = websocket.cookies.get(SESSION_COOKIE)
-    if not token or not auth_manager.validate_token(token):
-        return None
-    return auth_manager.get_username_for_token(token)
+def _authenticate_ws(websocket: WebSocket, auth_manager=None) -> Optional[str]:
+    """Return username (empty string in single-user mode)."""
+    return ""
 
 
 def setup_terminal_routes() -> APIRouter:
@@ -61,9 +47,7 @@ def setup_terminal_routes() -> APIRouter:
         cols: int = Query(80, ge=2, le=500),
         rows: int = Query(24, ge=2, le=200),
     ):
-        auth_manager: Optional[AuthManager] = getattr(
-            websocket.app.state, "auth_manager", None
-        )
+        auth_manager = getattr(websocket.app.state, "auth_manager", None)
         user = _authenticate_ws(websocket, auth_manager)
         if user is None:
             await websocket.close(code=4401, reason="Not authenticated")

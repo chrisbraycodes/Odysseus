@@ -412,22 +412,7 @@ def setup_task_routes(task_scheduler) -> APIRouter:
     _ADMIN_ONLY_ACTIONS = {"run_local", "run_script", "ssh_command"}
 
     def _is_admin(user: str | None) -> bool:
-        if not user:
-            return False
-        # In-process tool-loopback marker — AuthMiddleware validated
-        # the internal token + loopback client before stamping this,
-        # so treat as admin-equivalent.
-        if user == "internal-tool":
-            return True
-        try:
-            from core.auth import AuthManager
-            auth = AuthManager()
-            if not auth.is_configured:
-                # Unconfigured single-user deploy: trust the local owner.
-                return True
-            return bool(auth.is_admin(user))
-        except Exception:
-            return False
+        return True
 
     @router.post("")
     async def create_task(request: Request, req: TaskCreate):

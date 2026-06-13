@@ -991,11 +991,7 @@ async def action_daily_brief(owner: str, **kwargs) -> Tuple[str, bool]:
         # (unconfigured) deploys only. In a multi-user deploy, one
         # user's daily brief must not include another user's notes or
         # events that happen to be stored with owner=None.
-        try:
-            from core.auth import AuthManager
-            _allow_null = not AuthManager().is_configured
-        except Exception:
-            _allow_null = False
+        _allow_null = True
         db = SessionLocal()
         try:
             ev_q = db.query(CalendarEvent).join(CalendarCal).filter(

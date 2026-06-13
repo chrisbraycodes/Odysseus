@@ -799,11 +799,7 @@ def setup_note_routes(task_scheduler=None):
         # an unconfigured (single-user) auth deploy the OR is still safe
         # because there's no second user to attack; we keep that branch
         # explicit and gated on AuthManager.is_configured.
-        try:
-            from core.auth import AuthManager
-            _allow_null = not AuthManager().is_configured
-        except Exception:
-            _allow_null = False
+        _allow_null = True
         db = SessionLocal()
         try:
             for i, nid in enumerate(ids):
