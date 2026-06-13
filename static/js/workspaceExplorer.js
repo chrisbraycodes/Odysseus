@@ -126,6 +126,27 @@ async function _downloadFile(relPath) {
   URL.revokeObjectURL(url);
 }
 
+async function _downloadFolder(relPath) {
+  if (!_workspace) return;
+  const root = await _resolveWorkspaceRoot(_workspace);
+  const qs = new URLSearchParams({ workspace: root, path: relPath || '' });
+  const res = await fetch(`${API_BASE}/api/workspace/download-folder?${qs}`, { credentials: 'same-origin' });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(_apiErrorDetail(err, `download failed: ${res.status}`));
+  }
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `${_basename(relPath) || 'workspace'}.zip`;
+  a.rel = 'noopener';
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
+
 async function _importFiles(fileList) {
   if (!_workspace || !fileList?.length) return;
   const root = await _resolveWorkspaceRoot(_workspace);
@@ -263,6 +284,7 @@ function _renderTree(data) {
     html += `<div class="ws-tree-row ws-tree-dir" data-action="toggle" data-path="${_esc(d.path)}">
       <span class="ws-tree-chevron">${exp ? '▾' : '▸'}</span>${_DIR_ICON}<span class="ws-tree-label">${_esc(d.name)}</span>
       <span class="ws-tree-actions">
+        <button type="button" class="ws-tree-action ws-tree-download" data-action="download-folder" data-path="${_esc(d.path)}" title="Download folder as zip">${_DOWNLOAD_ICON}</button>
         <button type="button" class="ws-tree-action ws-tree-delete" data-action="delete" data-path="${_esc(d.path)}" data-is-dir="1" title="Delete folder">${_DELETE_ICON}</button>
       </span>
     </div>`;
@@ -313,6 +335,14 @@ function _wireTreeRowActions(root) {
       });
     });
   });
+  root.querySelectorAll('.ws-tree-download[data-action="download-folder"]').forEach((btn) => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      _downloadFolder(btn.dataset.path).catch((err) => {
+        if (uiModule.showError) uiModule.showError(err.message || 'Download failed');
+      });
+    });
+  });
   root.querySelectorAll('.ws-tree-delete[data-action="delete"]').forEach((btn) => {
     btn.addEventListener('click', (e) => {
       e.stopPropagation();
@@ -333,6 +363,7 @@ async function _loadDirChildren(dirPath) {
       html += `<div class="ws-tree-row ws-tree-dir ws-tree-nested" data-action="toggle" data-path="${_esc(d.path)}">
         <span class="ws-tree-chevron">${exp ? '▾' : '▸'}</span>${_DIR_ICON}<span class="ws-tree-label">${_esc(d.name)}</span>
         <span class="ws-tree-actions">
+          <button type="button" class="ws-tree-action ws-tree-download" data-action="download-folder" data-path="${_esc(d.path)}" title="Download folder as zip">${_DOWNLOAD_ICON}</button>
           <button type="button" class="ws-tree-action ws-tree-delete" data-action="delete" data-path="${_esc(d.path)}" data-is-dir="1" title="Delete folder">${_DELETE_ICON}</button>
         </span>
       </div>`;
@@ -572,7 +603,7 @@ function _ensureWorkbenchColumn() {
           <span class="ws-terminal-dock-title">Terminal</span>
           <span class="prometheus-source-label">PROMETHEUS SOURCE</span>
         </div>
-        <span class="ws-terminal-dock-hint" title="Interactive shell for you (not the agent). Select text to copy; Ctrl+Shift+C or Ctrl+C with selection. Paste: Ctrl+Shift+V or Ctrl+V.">Manual shell · Copy/Paste: Ctrl+C / Ctrl+V</span>
+        <span class="ws-terminal-dock-hint" title="Interactive shell for you (not the agent).">Manual shell</span>
       </div>
       <div class="ws-terminal-mount" id="ws-terminal-mount"></div>`;
     _workbenchCol.appendChild(_terminalDock);

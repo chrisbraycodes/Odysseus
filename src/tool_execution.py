@@ -722,7 +722,9 @@ def _prepare_bash_command(content: str, workspace: Optional[str]) -> str:
         cmd = re.sub(ws_esc + r"(?:/[^\s;&|>]*)?", _quote_match, cmd)
     from src.workspace_dev import is_dev_server_command, prepare_node_workspace_command
 
-    cmd, _preview = prepare_node_workspace_command(cmd, workspace)
+    cmd, _preview, run_on_host = prepare_node_workspace_command(cmd, workspace)
+    if run_on_host:
+        return f"#@host-dev@#\n{cmd}"
     # Long installs / dev servers block the browser stream — run detached so the
     # agent can finish the turn and resume when output is ready.
     if not is_bg and (
@@ -779,6 +781,14 @@ async def _direct_fallback(
     try:
         if tool == "bash":
             from src.plan_execution import resolve_scaffold_cwd
+            from src.workspace_dev import host_dev_server_message
+
+            if content.startswith("#@host-dev@#"):
+                host_cmd = content.split("\n", 1)[-1].strip()
+                return {
+                    "output": host_dev_server_message(workspace, host_cmd),
+                    "exit_code": 0,
+                }
             cwd = resolve_scaffold_cwd(workspace, workspace or _default_agent_cwd())
             proc = await asyncio.create_subprocess_shell(
                 content,

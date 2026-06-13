@@ -41,8 +41,9 @@ export function whenWorkspaceReady() {
   return _readyPromise || Promise.resolve();
 }
 
-export function syncWorkspaceIndicator(path, { displayPath = '' } = {}) {
+export function syncWorkspaceIndicator(path, { displayPath = '', hostPath = '' } = {}) {
   const shown = displayPath || path;
+  const hostShown = hostPath || '';
   const pill = document.getElementById('workspace-indicator-btn');
   const name = document.getElementById('workspace-indicator-name');
   const overflow = document.getElementById('overflow-workspace-btn');
@@ -50,7 +51,9 @@ export function syncWorkspaceIndicator(path, { displayPath = '' } = {}) {
   if (pill) {
     pill.style.display = path ? '' : 'none';
     pill.classList.toggle('active', !!path);
-    if (path) pill.title = `Workspace: ${shown} — click name to open files, ✕ to clear`;
+    if (path) pill.title = hostShown
+      ? `Workspace: ${shown} (host: ${hostShown}) — click name to open files, ✕ to clear`
+      : `Workspace: ${shown} — click name to open files, ✕ to clear`;
   }
   if (name) name.textContent = path ? _basename(shown) : '';
   if (overflow) overflow.classList.toggle('active', !!path);
@@ -58,11 +61,11 @@ export function syncWorkspaceIndicator(path, { displayPath = '' } = {}) {
   try { document.dispatchEvent(new CustomEvent('overflow-state-change')); } catch (_) {}
 }
 
-export function setWorkspace(path, { displayPath = '', notify = true } = {}) {
+export function setWorkspace(path, { displayPath = '', hostPath = '', notify = true } = {}) {
   const prev = getWorkspace();
   if (path) Storage.set(KEYS.WORKSPACE, path);
   else Storage.remove(KEYS.WORKSPACE);
-  syncWorkspaceIndicator(path || '', { displayPath });
+  syncWorkspaceIndicator(path || '', { displayPath, hostPath });
   const shown = displayPath || path || '';
   const changed = (prev || '') !== (path || '');
   if (notify) {
@@ -81,19 +84,22 @@ export function setWorkspace(path, { displayPath = '', notify = true } = {}) {
 
 /** Resolve a stored or typed path against the server (maps Desktop → /workspace in Docker). */
 export async function normalizeWorkspace(path, { notify = false } = {}) {
-  if (!path) return { valid: false, path: '', displayPath: '' };
+  if (!path) return { valid: false, path: '', displayPath: '', hostPath: '' };
   const v = await validateWorkspace(path);
   _dockerWorkspace = !!v.docker_workspace;
   if (v.default_root) _defaultRoot = v.default_root;
+  if (v.container_root && !v.default_root) _defaultRoot = v.container_root;
   if (v.valid && v.path) {
     const displayPath = v.display_path || v.path;
+    const hostPath = v.host_path || '';
     const prev = getWorkspace();
     const shouldNotify = notify || prev !== v.path;
-    setWorkspace(v.path, { displayPath, notify: shouldNotify });
+    setWorkspace(v.path, { displayPath, hostPath, notify: shouldNotify });
     return {
       valid: true,
       path: v.path,
       displayPath,
+      hostPath,
       normalizedFrom: v.normalized_from || null,
     };
   }
@@ -140,10 +146,19 @@ function _setBodyLoading(msg = 'Loading folders…') {
   if (body) body.innerHTML = `<div class="workspace-empty">${_esc(msg)}</div>`;
 }
 
-function _updateDockerHint(inDocker) {
+function _updateDockerHint(data) {
   const hint = _modal?.querySelector('#workspace-docker-hint');
+  const sync = _modal?.querySelector('#workspace-sync-hint');
   if (!hint) return;
+  const inDocker = !!(data?.docker_workspace ?? _dockerWorkspace);
   hint.style.display = inDocker ? '' : 'none';
+  if (sync && inDocker) {
+    const hostRoot = data?.host_root || '';
+    const containerRoot = data?.container_root || '/workspace';
+    sync.textContent = hostRoot
+      ? `Your computer folder ${hostRoot} is synced with ${containerRoot} in the container. `
+      : `Set WORKSPACE_HOST_PATH in .env to mount a host folder at ${containerRoot}. `;
+  }
 }
 
 function _render(data) {
@@ -158,7 +173,7 @@ function _render(data) {
     pathEl.value = shown;
     pathEl.title = shown;
     pathEl.placeholder = _dockerWorkspace
-      ? 'Container path under /workspace — press Enter to go'
+      ? 'Path under /workspace or matching host folder — press Enter'
       : 'Type or paste a folder path, then press Enter';
   }
   if (useBtn) {
@@ -166,7 +181,7 @@ function _render(data) {
       ? `Use "${_basename(shown)}" as workspace`
       : 'Use this folder as workspace';
   }
-  _updateDockerHint(_dockerWorkspace);
+  _updateDockerHint(data);
   let rows = '';
   if (data.parent) {
     const parentShown = data.parent_display || data.parent;
@@ -249,7 +264,9 @@ function _getModal() {
         <button class="close-btn" id="workspace-close" aria-label="Close">✖</button>
       </div>
       <div class="workspace-docker-hint" id="workspace-docker-hint" style="display:none">
-        Your Desktop is mounted at <code>/workspace</code>. Pick a folder here, or import one from your computer. Host paths like <code>C:\\...</code> are not visible inside the container.
+        <span id="workspace-sync-hint"></span>
+        Pick a folder under <code>/workspace</code>, paste the matching folder from your computer, or use Import to copy files in.
+        Dev servers run on your computer when <code>WORKSPACE_DEV_EXEC=host</code> (default in Docker).
       </div>
       <input type="text" class="styled-prompt-input workspace-cur" id="workspace-cur-path"
              spellcheck="false" autocomplete="off" autocapitalize="off" autocorrect="off"
@@ -257,7 +274,7 @@ function _getModal() {
       <div class="workspace-toolbar">
         <button type="button" class="workspace-tool-btn" id="workspace-import-folder" title="Copy a folder from your computer into the current location">Import folder…</button>
         <button type="button" class="workspace-tool-btn" id="workspace-import-files" title="Copy files from your computer into the current location">Import files…</button>
-        <button type="button" class="workspace-tool-btn workspace-tool-btn-muted" id="workspace-go-root" title="Jump to workspace root">Desktop root</button>
+        <button type="button" class="workspace-tool-btn workspace-tool-btn-muted" id="workspace-go-root" title="Jump to workspace mount root">Mount root</button>
       </div>
       <input type="file" id="workspace-folder-input" webkitdirectory directory multiple hidden />
       <input type="file" id="workspace-files-input" multiple hidden />
@@ -283,7 +300,7 @@ function _getModal() {
       if (!n.valid) {
         if (uiModule?.showError) {
           uiModule.showError(_dockerWorkspace
-            ? 'Pick a folder under /workspace (your Desktop mount)'
+            ? 'Pick a folder under /workspace or paste the matching host folder path'
             : 'That folder is not available');
         }
         return;

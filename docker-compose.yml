@@ -62,6 +62,10 @@ services:
       - WORKSPACE_DEV_BIND=${DEV_BIND:-127.0.0.1}
       - WORKSPACE_DEV_PORT=${WORKSPACE_DEV_PORT:-3000}
       - WORKSPACE_VITE_PORT=${WORKSPACE_VITE_PORT:-5173}
+      # Host folder string for /workspace (path mapping in UI; same as WORKSPACE_HOST_PATH).
+      - WORKSPACE_HOST_ROOT=${WORKSPACE_HOST_PATH:-./workspace}
+      # host = dev servers run on your computer (default); container = run inside Docker.
+      - WORKSPACE_DEV_EXEC=${WORKSPACE_DEV_EXEC:-host}
       - ODYSSEUS_WORKSPACE_ROOT=/workspace
       # PUID / PGID — the user/group the container drops to before
       # running uvicorn (entrypoint also chowns /app/data + /app/logs

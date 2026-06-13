@@ -1,12 +1,11 @@
 """Automatic Node/dev-server helpers for Docker workspace bind mounts.
 
-When /workspace is mounted (Desktop → container), npm projects often need:
-  * deps installed inside the container (not only on the Windows host)
-  * HOST=0.0.0.0 / BROWSER=none so mapped preview ports work
-  * long-running dev servers run in the background
+With WORKSPACE_DEV_EXEC=host (default in Docker), dev servers run on the
+user's computer at the bind-mounted host folder — not inside the container.
+Files stay in sync because /workspace is the same directory on disk.
 
-Tool execution calls ``prepare_node_workspace_command`` so the agent (and the
-user typing ``npm start``) do not need IDE intervention for these steps.
+With WORKSPACE_DEV_EXEC=container, dev servers run in the container with
+HOST=0.0.0.0 so mapped preview ports work.
 """
 
 from __future__ import annotations
@@ -14,7 +13,10 @@ from __future__ import annotations
 import json
 import os
 import re
+import shlex
 from typing import Optional, Tuple
+
+from src.workspace_path import container_path_to_host
 
 _DEV_SERVER_RE = re.compile(
     r"(?:"
@@ -42,8 +44,22 @@ _NPM_INSTALL_RE = re.compile(r"^\s*npm\s+install\b", re.I)
 
 
 def docker_workspace_mounted() -> bool:
-    """True when the Desktop /workspace bind mount is present."""
+    """True when the /workspace bind mount is present."""
     return os.path.isdir("/workspace")
+
+
+def dev_exec_target() -> str:
+    """host | container | local — where dev preview servers should run."""
+    raw = (os.environ.get("WORKSPACE_DEV_EXEC") or "").strip().lower()
+    if raw in ("host", "container", "local"):
+        return raw
+    if docker_workspace_mounted():
+        return "host"
+    return "local"
+
+
+def dev_server_run_on_host() -> bool:
+    return dev_exec_target() == "host" and docker_workspace_mounted()
 
 
 def preview_host() -> str:
@@ -119,8 +135,8 @@ def _is_react_dev_command(cmd: str) -> bool:
 
 
 def inject_dev_server_env(cmd: str) -> str:
-    """Prefix env / flags so dev servers are reachable via Docker port maps."""
-    if not docker_workspace_mounted():
+    """Prefix env / flags so in-container dev servers are reachable via port maps."""
+    if not docker_workspace_mounted() or dev_server_run_on_host():
         return cmd
     out = cmd.strip()
     if _is_react_dev_command(out) and not re.search(r"\bHOST=", out):
@@ -131,7 +147,7 @@ def inject_dev_server_env(cmd: str) -> str:
 
 
 def dev_server_preview_url(cmd: str) -> Optional[str]:
-    if not docker_workspace_mounted() or not is_dev_server_command(cmd):
+    if not is_dev_server_command(cmd):
         return None
     host = preview_host()
     if _is_vite_command(cmd) and not _is_react_dev_command(cmd):
@@ -139,22 +155,41 @@ def dev_server_preview_url(cmd: str) -> Optional[str]:
     return f"http://{host}:{react_preview_port()}/"
 
 
+def host_dev_server_message(workspace: Optional[str], cmd: str) -> str:
+    """Instructions when dev servers must run on the host computer."""
+    host_dir = container_path_to_host(workspace or "") if workspace else ""
+    host_dir = host_dir or "(your workspace folder on this computer)"
+    preview = dev_server_preview_url(cmd) or f"http://{preview_host()}:{react_preview_port()}/"
+    quoted = shlex.quote(host_dir) if host_dir.startswith("/") else f'"{host_dir}"'
+    return (
+        "Dev server runs on your computer (not inside the Docker container).\n"
+        f"Workspace files are synced via the bind mount.\n\n"
+        f"On your computer, open a terminal and run:\n"
+        f"  cd {quoted}\n"
+        f"  {cmd.strip()}\n\n"
+        f"Then open the preview: {preview}"
+    )
+
+
 def prepare_node_workspace_command(
     cmd: str, workspace: Optional[str]
-) -> Tuple[str, Optional[str]]:
+) -> Tuple[str, Optional[str], bool]:
     """Normalize a bash command for workspace Node projects.
 
-    Returns ``(prepared_command, preview_url)``. When deps are missing,
-    ``npm install &&`` is prepended automatically. Dev-server env is injected
-    when running under the /workspace Docker mount.
+    Returns ``(prepared_command, preview_url, run_on_host)``.
+    When ``run_on_host`` is True, callers must not execute the dev-server
+    command inside the container.
     """
     prepared = (cmd or "").strip()
     if not prepared or not workspace:
-        return prepared, dev_server_preview_url(prepared)
+        return prepared, dev_server_preview_url(prepared), False
+
+    run_on_host = dev_server_run_on_host() and is_dev_server_command(prepared)
 
     install_prefix = ""
     if (
-        needs_npm_deps(prepared)
+        not run_on_host
+        and needs_npm_deps(prepared)
         and npm_deps_missing(workspace)
         and not _NPM_INSTALL_RE.match(prepared)
     ):
@@ -163,10 +198,12 @@ def prepare_node_workspace_command(
     if is_dev_server_command(prepared):
         prepared = inject_dev_server_env(prepared)
 
-    return install_prefix + prepared, dev_server_preview_url(prepared)
+    return install_prefix + prepared, dev_server_preview_url(prepared), run_on_host
 
 
-def preview_note(url: Optional[str]) -> str:
+def preview_note(url: Optional[str], *, run_on_host: bool = False, workspace: Optional[str] = None, cmd: str = "") -> str:
+    if run_on_host and workspace and cmd:
+        return "\n\n" + host_dev_server_message(workspace, cmd)
     if not url:
         return ""
     return (

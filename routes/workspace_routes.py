@@ -1,6 +1,8 @@
 """Workspace API — browse server directories, list/read/write/delete project files."""
+import io
 import os
 import shutil
+import zipfile
 from typing import Optional
 
 from fastapi import APIRouter, Request, HTTPException, Query, File, Form, UploadFile
@@ -11,11 +13,14 @@ from src.auth_helpers import get_current_user
 from src.tool_security import owner_is_admin_or_single_user
 from src.tool_execution import _resolve_tool_path_in_workspace
 from src.workspace_path import (
-    docker_workspace_available,
+    container_path_to_host,
     display_workspace_path,
+    display_workspace_paths,
+    docker_workspace_available,
     path_under_workspace_root,
     resolve_workspace_path,
     validate_workspace_submission,
+    workspace_sync_info,
 )
 
 _MAX_READ_BYTES = 512_000
@@ -38,7 +43,8 @@ def _resolve_workspace_root(raw: str) -> str:
             status_code=400,
             detail=(
                 "workspace is not available inside the container — "
-                "pick a folder under /workspace (your Desktop mount)"
+                "use a path under /workspace or the matching folder on your computer "
+                "(see WORKSPACE_HOST_PATH in .env)"
             ),
         )
     if not resolved:
@@ -65,7 +71,10 @@ def _resolve_browse_target(raw: str) -> str:
         elif docker_workspace_available():
             raise HTTPException(
                 status_code=400,
-                detail="browse outside /workspace is not available in the container",
+                detail=(
+                    "path is outside the workspace mount — use /workspace/... "
+                    "or the matching host folder from WORKSPACE_HOST_PATH"
+                ),
             )
         else:
             target = os.path.realpath(os.path.expanduser(text))
@@ -169,7 +178,8 @@ def setup_workspace_routes():
         return {
             "path": target,
             "display_path": display_workspace_path(target),
-            "docker_workspace": in_docker,
+            "host_path": container_path_to_host(target) or "",
+            **workspace_sync_info(target),
             "default_root": _docker_root() if in_docker else "",
             "parent": parent_out,
             "parent_display": parent_display_out,
@@ -179,6 +189,7 @@ def setup_workspace_routes():
                         "name": d["name"],
                         "path": d["path"],
                         "display_path": display_workspace_path(d["path"]),
+                        "host_path": container_path_to_host(d["path"]) or "",
                     }
                     for d in dirs
                 ],
@@ -193,21 +204,21 @@ def setup_workspace_routes():
 
         raw = (path or "").strip()
         if not raw:
-            return {
-                "valid": False,
-                "path": "",
-                "docker_workspace": docker_workspace_available(),
-                "default_root": _docker_root(),
-            }
+            info = workspace_sync_info()
+            info.update({"valid": False, "path": "", "default_root": _docker_root()})
+            return info
 
         ok, resolved, normalized_from = validate_workspace_submission(raw)
+        container_display, host_display = (
+            display_workspace_paths(resolved) if ok else ("", "")
+        )
         return {
             "valid": ok,
             "path": resolved if ok else "",
-            "display_path": display_workspace_path(resolved) if ok else "",
+            "display_path": container_display if ok else "",
+            "host_path": host_display if ok else "",
             "normalized_from": normalized_from,
-            "docker_workspace": docker_workspace_available(),
-            "default_root": _docker_root(),
+            **workspace_sync_info(resolved if ok else ""),
         }
 
     @router.get("/list")
@@ -439,6 +450,40 @@ def setup_workspace_routes():
             target,
             filename=os.path.basename(target),
             media_type="application/octet-stream",
+        )
+
+    @router.get("/download-folder")
+    def download_folder(
+        request: Request,
+        workspace: str = Query(...),
+        path: str = Query(default="", description="Folder path relative to workspace"),
+    ):
+        """Download a workspace folder as a zip archive."""
+        _require_workspace_admin(request)
+        root = _resolve_workspace_root(workspace)
+        target = _resolve_in_workspace(root, path, must_be_dir=True)
+        base_name = os.path.basename(target.rstrip(os.sep)) or "workspace"
+
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+            for dirpath, dirnames, filenames in os.walk(target):
+                dirnames[:] = [d for d in dirnames if not d.startswith(".")]
+                for fname in filenames:
+                    if fname.startswith("."):
+                        continue
+                    abs_file = os.path.join(dirpath, fname)
+                    rel_arc = os.path.relpath(abs_file, target).replace("\\", "/")
+                    try:
+                        zf.write(abs_file, arcname=f"{base_name}/{rel_arc}")
+                    except OSError:
+                        continue
+        buf.seek(0)
+        from fastapi.responses import StreamingResponse
+
+        return StreamingResponse(
+            buf,
+            media_type="application/zip",
+            headers={"Content-Disposition": f'attachment; filename="{base_name}.zip"'},
         )
 
     return router

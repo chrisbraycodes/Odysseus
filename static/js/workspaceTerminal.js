@@ -178,13 +178,13 @@ export function createWorkspaceTerminal(mountEl, opts) {
   copyBtn.type = 'button';
   copyBtn.className = 'ws-terminal-clip-btn';
   copyBtn.textContent = 'Copy';
-  copyBtn.title = 'Copy selection (Ctrl+Shift+C, or Ctrl+C when selected)';
+  copyBtn.title = 'Copy selection';
 
   const pasteBtn = document.createElement('button');
   pasteBtn.type = 'button';
   pasteBtn.className = 'ws-terminal-clip-btn';
   pasteBtn.textContent = 'Paste';
-  pasteBtn.title = 'Paste from clipboard (Ctrl+Shift+V or Ctrl+V)';
+  pasteBtn.title = 'Paste from clipboard';
 
   clipGroup.appendChild(copyBtn);
   clipGroup.appendChild(pasteBtn);

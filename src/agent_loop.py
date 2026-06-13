@@ -1685,8 +1685,9 @@ async def stream_agent_loop(
             f"```bash\\nnpx create-react-app <name>\\n``` immediately — cwd is "
             f"already here. No `cd`, no `sudo`, no tutorial steps.\n"
             f"Dev preview: run ```bash\\nnpm start\\n``` (or `npm run dev` / `vite`) — "
-            f"Odysseus auto-installs deps, configures Docker networking, and returns "
-            f"the host preview URL. User opens it in a new browser tab."
+            f"with Docker + bind mount, dev servers run on your computer at the "
+            f"host workspace folder (WORKSPACE_DEV_EXEC=host). Odysseus returns "
+            f"the preview URL and host run instructions. User opens it in a new browser tab."
         )
         if cwd_system_note:
             _cwd = cwd_system_note(workspace)
