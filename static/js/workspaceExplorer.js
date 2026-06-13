@@ -13,6 +13,7 @@ import {
   isDockerWorkspace,
 } from './workspace.js';
 import { createWorkspaceTerminalPanel } from './workspaceTerminal.js';
+import { mountWsPanelResize, unmountWsPanelResize, refreshWsPanelResize } from './wsPanelResize.js';
 
 const API_BASE = window.location.origin;
 const STORAGE_OPEN = 'ws-explorer-open';
@@ -612,6 +613,7 @@ function _ensureWorkbenchColumn() {
     chat.parentNode.insertBefore(_workbenchCol, chat);
   }
   _adoptEditorIntoWorkbench();
+  mountWsPanelResize();
   return true;
 }
 
@@ -726,6 +728,7 @@ export async function openPanel({ promptWorkspace = false } = {}) {
   const overflow = document.getElementById('overflow-ws-files-btn');
   if (overflow) overflow.classList.add('active');
   _ensureEditorInWorkbench();
+  mountWsPanelResize();
 
   const ok = await _syncExplorerToWorkspace();
   if (!ok && promptWorkspace) {
@@ -737,6 +740,7 @@ export async function openPanel({ promptWorkspace = false } = {}) {
 export function closePanel() {
   if (!_isOpen) return;
   if (_docMod()?.hasDirtyWorkspaceFiles?.() && !confirm('Discard unsaved file changes?')) return;
+  unmountWsPanelResize();
   _disposeTerminal();
   _releaseWorkbench();
   document.body.classList.remove('ws-explorer-view');
@@ -791,6 +795,7 @@ export async function ensureIdeLayoutOpen() {
   _docMod()?.openPanel?.();
   _docMod()?.ensurePaneMounted?.();
   _adoptEditorIntoWorkbench();
+  refreshWsPanelResize();
 }
 
 export function initWorkspaceExplorer() {

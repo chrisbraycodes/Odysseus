@@ -36539,19 +36539,18 @@ body.ws-explorer-view .ws-explorer-section-label {
 
 /* ---- Workspace project explorer (file tree + editor) ---- */
 body.ws-explorer-view .ws-explorer-pane {
-  flex: 0 0 min(340px, 42vw);
-  min-width: 240px;
-  max-width: 480px;
+  flex: 0 0 var(--ws-files-width, min(340px, 42vw));
+  min-width: 200px;
+  max-width: none;
   display: grid;
   grid-template-rows: auto auto minmax(0, 1fr);
   background: var(--panel, var(--bg));
-  border-right: 1px solid var(--border);
+  border-right: none;
   box-shadow: 4px 0 18px rgba(0, 0, 0, 0.12);
   overflow: hidden;
   height: 100%;
   min-height: 0;
   z-index: 2;
-  order: 1;
 }
 body.ws-explorer-view .ws-explorer-pane > * {
   min-width: 0;
@@ -36563,14 +36562,13 @@ body.ws-explorer-view .ws-workbench-column {
   min-height: 0;
   display: flex;
   flex-direction: column;
-  order: 2;
   overflow: hidden;
   background: var(--bg);
 }
 body.ws-explorer-view .ws-terminal-dock {
-  flex: 0 0 min(280px, 32vh);
-  min-height: 160px;
-  max-height: 50vh;
+  flex: 0 0 var(--ws-terminal-height, min(280px, 32vh));
+  min-height: 120px;
+  max-height: 60vh;
   display: flex;
   flex-direction: column;
   border-top: 1px solid var(--border);
@@ -36616,9 +36614,77 @@ body.ws-explorer-view.doc-view .doc-divider {
   display: none;
 }
 body.ws-explorer-view .chat-container {
-  flex: 0 0 min(380px, 36vw);
+  flex: 0 0 var(--ws-chat-width, min(380px, 36vw));
   min-width: 280px;
-  order: 3;
+}
+
+/* Drag handles between IDE columns (files | editor+terminal | chat) */
+body.ws-explorer-view .ws-ide-split {
+  flex-shrink: 0;
+  position: relative;
+  z-index: 12;
+  user-select: none;
+  touch-action: none;
+  background: color-mix(in srgb, var(--fg) 8%, transparent);
+  transition: background 0.12s;
+}
+body.ws-explorer-view .ws-ide-split-v {
+  width: 6px;
+  margin: 0 -2px;
+  cursor: col-resize;
+  align-self: stretch;
+}
+body.ws-explorer-view .ws-ide-split-h {
+  height: 6px;
+  margin: -2px 0;
+  cursor: row-resize;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  background: var(--panel, var(--bg));
+}
+body.ws-explorer-view .ws-ide-split::before {
+  content: '';
+  position: absolute;
+  z-index: 1;
+}
+body.ws-explorer-view .ws-ide-split-v::before {
+  top: 0;
+  bottom: 0;
+  left: -5px;
+  width: 16px;
+  cursor: col-resize;
+}
+body.ws-explorer-view .ws-ide-split-h::before {
+  left: 0;
+  right: 0;
+  top: -5px;
+  height: 16px;
+  cursor: row-resize;
+}
+body.ws-explorer-view .ws-ide-split:hover,
+body.ws-explorer-view .ws-ide-split.ws-ide-split-dragging {
+  background: color-mix(in srgb, var(--accent, var(--red)) 35%, transparent);
+}
+body.ws-explorer-view .ws-ide-split-grip {
+  pointer-events: none;
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--fg) 28%, transparent);
+  transition: background 0.12s;
+}
+body.ws-explorer-view .ws-ide-split-v .ws-ide-split-grip {
+  width: 2px;
+  height: 42px;
+}
+body.ws-explorer-view .ws-ide-split-h .ws-ide-split-grip {
+  width: 42px;
+  height: 3px;
+}
+body.ws-explorer-view .ws-ide-split:hover .ws-ide-split-grip,
+body.ws-explorer-view .ws-ide-split.ws-ide-split-dragging .ws-ide-split-grip {
+  background: var(--accent, var(--red));
 }
 .ws-explorer-header {
   display: flex;
