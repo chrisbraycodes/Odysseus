@@ -2,8 +2,14 @@
 //
 // At most 2 panels visible at once, side by side with a drag handle.
 // Each tab button toggles its panel; a third selection replaces the oldest.
+//
+// ⚠ LAYOUT CONTRACT (read before editing): AGENTS.md + docs/workspace-ide-layout.md
+// NEVER hide the file tree, editor, or terminal on DESKTOP (>768px). Mobile-only
+// hide/show must use isMobileIdeLayout() and fully clean up + restoreWorkspaceIde()
+// when returning to desktop.
 
-import { isMobileIdeLayout, IDE_LAYOUT_EVENT, IDE_LAYOUT_SYNC_EVENT } from './ideLayoutMode.js';
+import { isMobileIdeLayout, isDesktopIdeLayout, IDE_LAYOUT_EVENT, IDE_LAYOUT_SYNC_EVENT } from './ideLayoutMode.js';
+import { restoreWorkspaceIde } from './workspaceExplorer.js';
 
 const LS_KEY       = 'ws-mob-v3';
 const MIN_PCT      = 20;
@@ -73,6 +79,71 @@ let _placeholders  = {};
 let _bodyObs       = null;
 let _lastTermKey   = '';
 
+const MOB_HAMBURGER_GAP = 5;
+const MOB_HAMBURGER_LEFT = 8;
+const MOB_HAMBURGER_SIZE = 44;
+
+function _panelEl(id) {
+  return TABS.find((t) => t.id === id)?.getEl?.() ?? null;
+}
+
+/** DOM insert order ≠ _panels order (terminal node is before chat). Reorder so flex left-to-right matches _panels. */
+function _orderVisiblePanels() {
+  if (_panels.length < 2) return;
+  const els = _panels.map((id) => _panelEl(id)).filter(Boolean);
+  if (els.length < 2) return;
+  const parent = els[0].parentNode;
+  if (!parent) return;
+  for (let i = 0; i < els.length - 1; i++) {
+    if (els[i].nextElementSibling !== els[i + 1]) {
+      parent.insertBefore(els[i], els[i + 1]);
+    }
+  }
+}
+
+function _panelTouchesViewportLeft(el) {
+  if (!el) return false;
+  const rect = el.getBoundingClientRect();
+  return rect.width > 0 && rect.left < 12;
+}
+
+function _syncTerminalTitleGap() {
+  const panel = document.getElementById('ws-mob-terminal-panel');
+  const title = panel?.querySelector('.ws-terminal-dock-title');
+  const row = panel?.querySelector('.ws-terminal-dock-title-row');
+  const btn = document.getElementById('hamburger-btn');
+
+  if (!title || !row) return;
+
+  const apply = _active
+    && _panels.includes('terminal')
+    && _panelTouchesViewportLeft(panel)
+    && btn
+    && btn.getBoundingClientRect().width > 0;
+
+  if (!apply) {
+    title.style.removeProperty('margin-left');
+    row.style.removeProperty('padding-left');
+    return;
+  }
+
+  title.style.removeProperty('margin-left');
+  row.style.removeProperty('padding-left');
+
+  const btnRect = btn.getBoundingClientRect();
+  const titleRect = title.getBoundingClientRect();
+  const shift = btnRect.right + MOB_HAMBURGER_GAP - titleRect.left;
+  if (shift > 0.5) {
+    title.style.setProperty('margin-left', `${Math.ceil(shift)}px`, 'important');
+  } else {
+    row.style.setProperty(
+      'padding-left',
+      `${MOB_HAMBURGER_LEFT + MOB_HAMBURGER_SIZE + MOB_HAMBURGER_GAP}px`,
+      'important',
+    );
+  }
+}
+
 function _rememberHamburgerHome() {
   const btn = document.getElementById('hamburger-btn');
   if (!btn || _hamburgerHome) return;
@@ -80,37 +151,14 @@ function _rememberHamburgerHome() {
   _hamburgerNext = btn.nextSibling;
 }
 
-function _terminalHamburgerSlot() {
-  const row = document.querySelector('#ws-mob-terminal-panel .ws-terminal-dock-title-row');
-  if (!row) return null;
-  let slot = row.querySelector('.ws-mob-hamburger-slot');
-  if (!slot) {
-    slot = document.createElement('div');
-    slot.className = 'ws-mob-hamburger-slot';
-    row.insertBefore(slot, row.firstChild);
-  }
-  return slot;
-}
-
 function _syncHamburgerPlacement() {
   if (!_active) return;
   const btn = document.getElementById('hamburger-btn');
   if (!btn) return;
   _rememberHamburgerHome();
-
-  const terminalOn = _panels.includes('terminal');
-  const slot = terminalOn && document.getElementById('ws-mob-terminal-panel')
-    ? _terminalHamburgerSlot()
-    : null;
-
-  if (slot) {
-    if (btn.parentNode !== slot) slot.appendChild(btn);
-    document.body.classList.add('ws-mob-hamburger-in-terminal');
-  } else if (_hamburgerHome) {
-    if (btn.parentNode !== _hamburgerHome) {
-      _hamburgerHome.insertBefore(btn, _hamburgerNext);
-    }
-    document.body.classList.remove('ws-mob-hamburger-in-terminal');
+  document.body.classList.remove('ws-mob-hamburger-in-terminal');
+  if (_hamburgerHome && btn.parentNode !== _hamburgerHome) {
+    _hamburgerHome.insertBefore(btn, _hamburgerNext);
   }
 }
 
@@ -168,11 +216,11 @@ function _layoutKey(availW, availH, kbH) {
 /** Why a panel has no content yet — null means the panel handles its own empty UI. */
 function _panelEmptyReason(id) {
   if (id === 'chat') return null;
-  const el = TABS.find((t) => t.id === id)?.getEl?.();
+  const el = _panelEl(id);
   if (!el) return 'loading';
   if (id === 'files' || id === 'terminal') return null;
   if (id === 'editor') {
-    if (!window.documentModule?.isPanelOpen?.()) return 'loading';
+    if (!document.getElementById('doc-editor-pane')) return 'loading';
     const hasTab = el.querySelector('.doc-tab:not(.doc-tab-new)');
     if (!hasTab) return 'noFile';
     return null;
@@ -180,27 +228,44 @@ function _panelEmptyReason(id) {
   return null;
 }
 
-function _ensurePlaceholder(id) {
-  if (!_placeholders[id]) {
-    const el = document.createElement('div');
-    el.className = 'ws-mob-panel-empty';
-    el.dataset.panel = id;
-    el.hidden = true;
-    document.body.appendChild(el);
-    _placeholders[id] = el;
+function _panelWidths(availW) {
+  const widths = {};
+  if (_panels.length === 1) {
+    widths[_panels[0]] = availW;
+  } else {
+    const leftW = Math.round(availW * _splitPct / 100);
+    widths[_panels[0]] = leftW;
+    widths[_panels[1]] = availW - leftW;
   }
-  return _placeholders[id];
+  return widths;
 }
 
 function _syncEmptyStates(widths, availH) {
+  if (!isMobileIdeLayout()) return;
   TABS.forEach(({ id }) => {
+    const el = _panelEl(id);
     const ph = _placeholders[id];
-    if (!_panels.includes(id)) {
+    const inLayout = _panels.includes(id);
+    const reason = inLayout ? _panelEmptyReason(id) : null;
+    const showPlaceholder = inLayout && reason;
+
+    if (el && inLayout) {
+      if (showPlaceholder) {
+        el.style.setProperty('display', 'none', 'important');
+      } else {
+        const w = widths[id] ?? window.innerWidth;
+        el.style.setProperty('display', 'flex', 'important');
+        el.style.setProperty('width', `${w}px`, 'important');
+        el.style.setProperty('max-width', `${w}px`, 'important');
+        el.style.setProperty('flex', `0 0 ${w}px`, 'important');
+      }
+    }
+
+    if (!inLayout) {
       if (ph) ph.hidden = true;
       return;
     }
 
-    const reason = _panelEmptyReason(id);
     if (!reason) {
       if (ph) ph.hidden = true;
       return;
@@ -225,13 +290,32 @@ function _syncEmptyStates(widths, availH) {
   });
 }
 
+function _syncEmptyStatesOnly() {
+  if (!_active || !isMobileIdeLayout()) return;
+  const availW = window.innerWidth - _sidebarW();
+  const availH = _vpH() - TAB_H;
+  _syncEmptyStates(_panelWidths(availW), availH);
+}
+
+function _ensurePlaceholder(id) {
+  if (!_placeholders[id]) {
+    const el = document.createElement('div');
+    el.className = 'ws-mob-panel-empty';
+    el.dataset.panel = id;
+    el.hidden = true;
+    document.body.appendChild(el);
+    _placeholders[id] = el;
+  }
+  return _placeholders[id];
+}
+
 function _clearPlaceholders() {
   Object.values(_placeholders).forEach((el) => el.remove());
   _placeholders = {};
 }
 
 function _apply({ force = false } = {}) {
-  if (!_active) return;
+  if (!_active || !isMobileIdeLayout()) return;
 
   _clampPanels();
 
@@ -245,14 +329,7 @@ function _apply({ force = false } = {}) {
   if (!force && key === _lastLayoutKey) return;
   _lastLayoutKey = key;
 
-  const widths = {};
-  if (_panels.length === 1) {
-    widths[_panels[0]] = availW;
-  } else {
-    const leftW = Math.round(availW * _splitPct / 100);
-    widths[_panels[0]] = leftW;
-    widths[_panels[1]] = availW - leftW;
-  }
+  const widths = _panelWidths(availW);
 
   TABS.forEach(({ id, getEl }) => {
     const el = getEl();
@@ -273,6 +350,8 @@ function _apply({ force = false } = {}) {
       el.style.setProperty('display', 'none', 'important');
     }
   });
+
+  _orderVisiblePanels();
 
   if (_bar) _bar.style.bottom = `${kbH}px`;
   document.body.style.setProperty('height', `${availH}px`, 'important');
@@ -313,7 +392,10 @@ function _apply({ force = false } = {}) {
   }
   _hadTerminal = hasTerminal;
 
+  document.body.dataset.wsMobLeft = _panels[0] || '';
   _syncHamburgerPlacement();
+  _syncTerminalTitleGap();
+  requestAnimationFrame(() => _syncTerminalTitleGap());
 }
 
 function _scheduleApply(opts = {}) {
@@ -323,6 +405,20 @@ function _scheduleApply(opts = {}) {
     _applyQueued = false;
     _apply(opts);
   });
+}
+
+function _focusPanel(id) {
+  if (!isMobileIdeLayout() || !_active) return;
+  const tab = TABS.find((t) => t.id === id);
+  if (!tab) return;
+  if (!tab.getEl() && tab.onOpen) tab.onOpen();
+  if (!_panels.includes(id)) {
+    if (_panels.length >= MAX_PANELS) _panels.shift();
+    _panels.push(id);
+  }
+  _lastLayoutKey = '';
+  _scheduleApply({ force: true });
+  if (!tab.getEl()) setTimeout(() => _scheduleApply({ force: true }), 120);
 }
 
 function _toggle(id) {
@@ -416,8 +512,11 @@ function _watchBody() {
     for (const m of muts) {
       for (const n of m.addedNodes) {
         if (n.nodeType === 1 && KNOWN.has(n.id)) {
-          _lastLayoutKey = '';
-          _scheduleApply({ force: true });
+          clearTimeout(_watchBody._timer);
+          _watchBody._timer = setTimeout(() => {
+            _lastLayoutKey = '';
+            _scheduleApply({ force: true });
+          }, 60);
           return;
         }
       }
@@ -426,25 +525,59 @@ function _watchBody() {
   _bodyObs.observe(document.body, { childList: true });
 }
 
+function _clearMobilePanelStyles() {
+  TABS.forEach(({ getEl }) => {
+    const el = getEl();
+    if (!el) return;
+    ['display', 'width', 'max-width', 'min-width', 'flex', 'height', 'max-height', 'overflow', 'position', 'visibility']
+      .forEach((p) => el.style.removeProperty(p));
+  });
+  ['ws-explorer-pane', 'ws-workbench-column', 'doc-editor-pane', 'ws-terminal-dock', 'ws-mob-terminal-panel', 'chat-container']
+    .forEach((id) => {
+      const el = document.getElementById(id);
+      if (!el) return;
+      ['display', 'width', 'max-width', 'min-width', 'flex', 'height', 'max-height', 'overflow', 'position', 'visibility']
+        .forEach((p) => el.style.removeProperty(p));
+    });
+  const docDivider = document.getElementById('doc-divider');
+  if (docDivider) docDivider.style.removeProperty('display');
+  document.querySelectorAll('.ws-mob-panel-empty').forEach((el) => el.remove());
+}
+
+function _ensureDesktopIdePanelsVisible() {
+  if (!isDesktopIdeLayout()) return;
+  document.body.classList.remove('ws-mob-view');
+  delete document.body.dataset.wsMobLeft;
+  document.body.style.removeProperty('height');
+  _clearMobilePanelStyles();
+}
+
+function _desktopIdeLooksHealthy() {
+  if (!document.body.classList.contains('ws-explorer-view')) return false;
+  for (const id of ['ws-explorer-pane', 'ws-workbench-column', 'ws-terminal-dock']) {
+    const el = document.getElementById(id);
+    if (!el || getComputedStyle(el).display === 'none') return false;
+  }
+  const editor = document.getElementById('doc-editor-pane');
+  if (editor && getComputedStyle(editor).display === 'none') return false;
+  return true;
+}
+
 function _cleanup() {
-  if (!_active) return;
   _active = false;
   _hadTerminal = false;
   _lastLayoutKey = '';
   _lastTermKey = '';
   clearTimeout(_saveTimer);
   _restoreHamburgerHome();
-  document.body.classList.remove('ws-mob-view');
-  document.body.style.removeProperty('height');
-  TABS.forEach(({ getEl }) => {
-    const el = getEl();
-    if (!el) return;
-    ['display', 'width', 'max-width', 'min-width', 'flex', 'height', 'max-height', 'overflow', 'position']
-      .forEach((p) => el.style.removeProperty(p));
-  });
-  const docDivider = document.getElementById('doc-divider');
-  if (docDivider) docDivider.style.removeProperty('display');
+  _ensureDesktopIdePanelsVisible();
   _clearPlaceholders();
+  const termTitle = document.querySelector('#ws-mob-terminal-panel .ws-terminal-dock-title');
+  termTitle?.style.removeProperty('margin-left');
+  document.querySelector('#ws-mob-terminal-panel .ws-terminal-dock-title-row')
+    ?.style.removeProperty('padding-left');
+  _bodyObs?.disconnect();
+  _bodyObs = null;
   _handle?.remove();
   _bar?.remove();
   _handle = null;
@@ -458,8 +591,15 @@ function _tabBarConnected() {
 function _syncMountState() {
   if (isMobileIdeLayout()) {
     mountMobilePanels();
-  } else if (_active) {
-    unmountMobilePanels();
+    return;
+  }
+  const hadMobileArtifacts = _active
+    || document.body.classList.contains('ws-mob-view')
+    || document.getElementById('ws-mob-tabbar');
+  unmountMobilePanels();
+  if (!isDesktopIdeLayout()) return;
+  if (hadMobileArtifacts || !_desktopIdeLooksHealthy()) {
+    restoreWorkspaceIde().catch(() => {});
   }
 }
 
@@ -475,10 +615,17 @@ function _wireGlobalListeners() {
 
   document.addEventListener('workspace-changed', refresh);
   document.addEventListener('workspace-environment-ready', refresh);
-  document.addEventListener('workspace-file-tabs-changed', refresh);
+  document.addEventListener('workspace-file-tabs-changed', () => {
+    if (!_active) return;
+    _syncEmptyStatesOnly();
+  });
 
   document.addEventListener(IDE_LAYOUT_EVENT, _syncMountState);
   document.addEventListener(IDE_LAYOUT_SYNC_EVENT, _syncMountState);
+  document.addEventListener('ws-mob-focus-panel', (e) => {
+    const id = e.detail?.panel;
+    if (id) _focusPanel(id);
+  });
 
   let resizeTimer = null;
   const onResize = () => {
@@ -502,11 +649,7 @@ export function mountMobilePanels() {
     _scheduleApply({ force: true });
     return;
   }
-  if (_active) {
-    _active = false;
-    _bar = null;
-    _handle = null;
-  }
+  if (_active) _cleanup();
 
   _load();
   _clampPanels();

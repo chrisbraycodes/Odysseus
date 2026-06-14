@@ -2,6 +2,9 @@
 //
 // Project explorer: file tree for the active workspace folder.
 // File editing uses the shared document editor tab bar (document.js).
+//
+// ⚠ LAYOUT CONTRACT: AGENTS.md + docs/workspace-ide-layout.md
+// Desktop: file tree, editor, and terminal must ALWAYS stay visible.
 
 import Storage from './storage.js';
 import uiModule from './ui.js';
@@ -16,6 +19,8 @@ import {
 import { createWorkspaceTerminalPanel } from './workspaceTerminal.js';
 import { mountWsPanelResize, unmountWsPanelResize, refreshWsPanelResize } from './wsPanelResize.js';
 import { isMobileIdeLayout, IDE_LAYOUT_EVENT } from './ideLayoutMode.js';
+import { openWorkspaceSavePicker } from './wsEditorSave.js';
+import documentModule from './document.js';
 
 const API_BASE = window.location.origin;
 const STORAGE_OPEN = 'ws-explorer-open';
@@ -24,6 +29,7 @@ const _DIR_ICON = '<svg class="ws-tree-icon" width="14" height="14" viewBox="0 0
 const _DELETE_ICON = '<svg class="ws-tree-action-icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>';
 const _DOWNLOAD_ICON = '<svg class="ws-tree-action-icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>';
 const _IMPORT_ICON = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>';
+const _NEW_FILE_ICON = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>';
 
 let _pane = null;
 let _workbenchCol = null;
@@ -49,7 +55,7 @@ function _esc(s) {
 }
 
 function _docMod() {
-  return window.documentModule || null;
+  return window.documentModule || documentModule || null;
 }
 
 function _fileTabState() {
@@ -62,9 +68,16 @@ function _openFileInEditor(detail) {
   const mod = _docMod();
   if (typeof mod?.openWorkspaceFile === 'function') {
     mod.openWorkspaceFile(detail);
-    return;
+  } else {
+    document.dispatchEvent(new CustomEvent('open-workspace-file', { detail, bubbles: true }));
   }
-  document.dispatchEvent(new CustomEvent('open-workspace-file', { detail, bubbles: true }));
+  if (!_isMobileLayout()) {
+    _ensureEditorInWorkbench();
+  } else {
+    try {
+      document.dispatchEvent(new CustomEvent('ws-mob-focus-panel', { detail: { panel: 'editor' } }));
+    } catch (_) {}
+  }
 }
 
 function _apiErrorDetail(err, fallback) {
@@ -106,6 +119,26 @@ async function _fetchFile(workspace, path) {
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
     throw new Error(_apiErrorDetail(err, `read failed: ${res.status}`));
+  }
+  return res.json();
+}
+
+async function _fileExists(workspace, relPath) {
+  const qs = new URLSearchParams({ workspace, path: relPath });
+  const res = await fetch(`${API_BASE}/api/workspace/file?${qs}`, { credentials: 'same-origin' });
+  return res.ok;
+}
+
+async function _writeFile(workspace, relPath, content = '') {
+  const res = await fetch(`${API_BASE}/api/workspace/file`, {
+    method: 'PUT',
+    credentials: 'same-origin',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ workspace, path: relPath, content }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(_apiErrorDetail(err, `write failed: ${res.status}`));
   }
   return res.json();
 }
@@ -429,6 +462,27 @@ async function _openFileAt(relPath) {
   }
 }
 
+function _createNewFile() {
+  const btn = _pane?.querySelector('#ws-explorer-new-file');
+  const rect = btn?.getBoundingClientRect?.()
+    || { left: 0, top: 0, bottom: 0, right: 0, width: 0, height: 0 };
+  openWorkspaceSavePicker(rect, {
+    defaultFilename: 'untitled.txt',
+    initialPath: _treePath || '',
+    title: 'New file',
+    confirmText: 'Create',
+    onSave: async (relPath, workspace) => {
+      if (await _fileExists(workspace, relPath)) {
+        throw new Error(`"${_basename(relPath)}" already exists — choose another name`);
+      }
+      await _writeFile(workspace, relPath, '');
+      _openFileInEditor({ workspace, path: relPath, content: '' });
+      if (uiModule.showToast) uiModule.showToast(`Created ${_basename(relPath)}`);
+      _loadTree(_treePath);
+    },
+  });
+}
+
 function _ensureMobileTerminalPanel() {
   if (document.getElementById('ws-mob-terminal-panel')) return;
   const chat = document.getElementById('chat-container');
@@ -440,8 +494,10 @@ function _ensureMobileTerminalPanel() {
     <div class="ws-terminal-dock-header">
       <div class="ws-terminal-dock-title-row">
         <div class="ws-mob-hamburger-slot" aria-hidden="true"></div>
-        <span class="ws-terminal-dock-title">Terminal</span>
-        <span class="prometheus-source-label">PROMETHEUS SOURCE</span>
+        <div class="ws-terminal-dock-title-group">
+          <span class="ws-terminal-dock-title">Terminal</span>
+          <span class="prometheus-source-label">PROMETHEUS SOURCE</span>
+        </div>
       </div>
     </div>
     <div class="ws-terminal-mount" id="ws-mob-terminal-mount"></div>`;
@@ -467,6 +523,7 @@ function _buildPane() {
         <span class="ws-explorer-title">Project files</span>
       </div>
       <div class="ws-explorer-header-actions">
+        <button type="button" class="ws-explorer-btn" id="ws-explorer-new-file" title="New file">${_NEW_FILE_ICON}</button>
         <button type="button" class="ws-explorer-btn" id="ws-explorer-import" title="Import file from your computer">${_IMPORT_ICON}</button>
         <button type="button" class="ws-explorer-btn" id="ws-explorer-refresh" title="Refresh">↻</button>
         <button type="button" class="ws-explorer-btn" id="ws-explorer-close" title="Close panel">✕</button>
@@ -484,6 +541,7 @@ function _buildPane() {
     </div>`;
 
   _pane.querySelector('#ws-explorer-close').addEventListener('click', () => closePanel());
+  _pane.querySelector('#ws-explorer-new-file').addEventListener('click', () => _createNewFile());
   _pane.querySelector('#ws-explorer-refresh').addEventListener('click', () => {
     if (_wsRoot()) _loadTree(_treePath);
   });
@@ -619,20 +677,32 @@ function _resetEditorWorkbenchLayout(pane) {
   pane.style.maxWidth = '';
 }
 
+function _syncWorkbenchRefsFromDom() {
+  if (!_workbenchCol) {
+    _workbenchCol = document.getElementById('ws-workbench-column');
+    _terminalDock = document.getElementById('ws-terminal-dock');
+  }
+}
+
 function _adoptEditorIntoWorkbench() {
-  if (!_workbenchCol || !_terminalDock) return;
+  _syncWorkbenchRefsFromDom();
+  const workbench = _workbenchCol || document.getElementById('ws-workbench-column');
+  const terminal = _terminalDock || document.getElementById('ws-terminal-dock');
   const pane = document.getElementById('doc-editor-pane');
-  if (!pane) return;
+  if (!workbench || !terminal || !pane) return;
   _resetEditorWorkbenchLayout(pane);
-  if (pane.parentNode === _workbenchCol) return;
-  _workbenchCol.insertBefore(pane, _terminalDock);
+  if (pane.parentNode === workbench) return;
+  workbench.insertBefore(pane, terminal);
+  document.body.classList.add('doc-view');
 }
 
 function _notifyTerminalLayout() {
   requestAnimationFrame(() => {
     _guardWorkbenchTerminalVisible();
-    try { refreshWsPanelResize(); } catch (_) {}
-    try { window.dispatchEvent(new Event('resize')); } catch (_) {}
+    if (!_isMobileLayout()) {
+      try { refreshWsPanelResize(); } catch (_) {}
+      try { window.dispatchEvent(new Event('resize')); } catch (_) {}
+    }
     try { document.dispatchEvent(new CustomEvent('ws-terminal-layout')); } catch (_) {}
   });
 }
@@ -656,6 +726,7 @@ function _ensureWorkbenchColumn() {
   if (_isMobileLayout()) return true;
   const chat = document.getElementById('chat-container');
   if (!chat) return false;
+  _syncWorkbenchRefsFromDom();
   if (!_workbenchCol) {
     _workbenchCol = document.createElement('div');
     _workbenchCol.id = 'ws-workbench-column';
@@ -705,14 +776,15 @@ function _releaseWorkbench() {
 
 function _ensureEditorInWorkbench() {
   if (_isMobileLayout()) return;
+  _ensureWorkbenchColumn();
   const docMod = _docMod();
   if (!docMod) return;
+  docMod.ensurePaneMounted?.();
   if (!docMod.isPanelOpen?.()) {
     docMod.openPanel?.();
-  } else {
-    docMod.ensurePaneMounted?.();
-    _adoptEditorIntoWorkbench();
   }
+  _adoptEditorIntoWorkbench();
+  _notifyTerminalLayout();
 }
 
 function _mountPane() {
@@ -887,7 +959,23 @@ export async function restoreWorkspaceIde() {
   _docMod()?.openPanel?.();
   _docMod()?.ensurePaneMounted?.();
   _adoptEditorIntoWorkbench();
+  _clearDesktopPanelInlineStyles();
   _notifyTerminalLayout();
+}
+
+function _clearDesktopPanelInlineStyles() {
+  if (_isMobileLayout()) return;
+  document.body.classList.remove('ws-mob-view');
+  delete document.body.dataset.wsMobLeft;
+  document.body.style.removeProperty('height');
+  document.querySelectorAll('.ws-mob-panel-empty').forEach((el) => el.remove());
+  const props = ['display', 'width', 'max-width', 'min-width', 'flex', 'height', 'max-height', 'overflow', 'position', 'visibility'];
+  ['ws-explorer-pane', 'ws-workbench-column', 'doc-editor-pane', 'ws-terminal-dock', 'chat-container'].forEach((id) => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    props.forEach((p) => el.style.removeProperty(p));
+  });
+  document.getElementById('doc-divider')?.style.removeProperty('display');
 }
 
 /** Desktop IDE layout: project files + editor + bottom terminal. Restored on load. */
@@ -898,6 +986,9 @@ export async function ensureIdeLayoutOpen() {
 
 export function initWorkspaceExplorer() {
   _watchIdeLayoutMode();
+  document.addEventListener('ws-adopt-editor-workbench', () => {
+    if (!_isMobileLayout()) _ensureEditorInWorkbench();
+  });
   document.addEventListener('workspace-environment-ready', () => {
     restoreWorkspaceIde().catch(() => {});
   });

@@ -19,6 +19,7 @@ End-users cloning the repo will land on `dev` by default. To run the curated/sta
 - Prefer one bug fix or feature per pull request.
 - Avoid broad rewrites, formatting-only changes, or moving many files unless the issue is specifically about structure.
 - If you want to work on a large feature, open an issue first and describe the approach.
+- **Workspace IDE layout:** read [AGENTS.md](AGENTS.md) and [docs/workspace-ide-layout.md](docs/workspace-ide-layout.md) before changing file tree, editor, terminal, or mobile panel code. Do not hide those panels on desktop.
 
 ## Setup
 

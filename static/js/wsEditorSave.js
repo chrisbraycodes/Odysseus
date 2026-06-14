@@ -62,7 +62,13 @@ function _positionMenu(menu, anchorRect) {
  * @param {DOMRect} anchorRect
  * @param {{ defaultFilename?: string, onSave: (relPath: string, workspaceRoot: string) => Promise<void>|void }} opts
  */
-export async function openWorkspaceSavePicker(anchorRect, { defaultFilename = 'untitled.txt', onSave } = {}) {
+export async function openWorkspaceSavePicker(anchorRect, {
+  defaultFilename = 'untitled.txt',
+  onSave,
+  title = 'Save to workspace',
+  confirmText = 'Save here',
+  initialPath = '',
+} = {}) {
   _closeMenu();
   await whenWorkspaceReady();
   const verified = await ensureVerifiedWorkspace();
@@ -77,14 +83,14 @@ export async function openWorkspaceSavePicker(anchorRect, { defaultFilename = 'u
   menu.className = 'doc-save-menu dropdown';
   menu.innerHTML = `
     <div class="doc-save-menu-header">
-      <span class="doc-save-menu-title">Save to workspace</span>
+      <span class="doc-save-menu-title"></span>
       <button type="button" class="doc-save-menu-close" title="Close">&times;</button>
     </div>
     <div class="doc-save-menu-path"></div>
     <div class="doc-save-menu-list"></div>
     <div class="doc-save-menu-footer">
       <input type="text" class="doc-save-menu-filename" placeholder="filename" autocomplete="off" />
-      <button type="button" class="doc-save-menu-confirm memory-toolbar-btn active">Save here</button>
+      <button type="button" class="doc-save-menu-confirm memory-toolbar-btn active"></button>
     </div>`;
   document.body.appendChild(menu);
   _menu = menu;
@@ -92,9 +98,13 @@ export async function openWorkspaceSavePicker(anchorRect, { defaultFilename = 'u
   const pathEl = menu.querySelector('.doc-save-menu-path');
   const listEl = menu.querySelector('.doc-save-menu-list');
   const nameInput = menu.querySelector('.doc-save-menu-filename');
+  const titleEl = menu.querySelector('.doc-save-menu-title');
+  const confirmBtn = menu.querySelector('.doc-save-menu-confirm');
+  titleEl.textContent = title;
+  confirmBtn.textContent = confirmText;
   nameInput.value = defaultFilename || 'untitled.txt';
 
-  let curPath = '';
+  let curPath = (initialPath || '').replace(/\\/g, '/').replace(/^\/+|\/+$/g, '');
 
   async function renderFolder() {
     listEl.innerHTML = '<div class="doc-save-menu-loading">Loading…</div>';

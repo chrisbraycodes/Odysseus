@@ -7,6 +7,8 @@ This repository is based on upstream Odysseus. The components below are Promethe
 | Area | What it is | Key paths |
 |------|------------|-----------|
 | **Workspace IDE** | In-browser project workspace at `/workspace`: file tree, multi-tab editor, integrated terminal (xterm.js PTY), dev-server preview, Desktop bind-mount support | `static/js/workspaceExplorer.js`, `workspaceTerminal.js`, `workspace.js`, `document.js` (workspace tabs), `routes/workspace_routes.py`, `routes/terminal_routes.py`, `src/workspace_path.py`, `src/workspace_dev.py`, `src/terminal_manager.py` |
+
+**Layout rule (agents & contributors):** on desktop, the file tree, editor, and terminal must never be hidden. See [AGENTS.md](AGENTS.md) and [docs/workspace-ide-layout.md](docs/workspace-ide-layout.md).
 | **Agent workspace tooling** | Confined file/shell tools, shell orchestration, plan execution, and action intents tied to the active workspace folder | `src/tool_execution.py`, `src/shell_orchestration.py`, `src/direct_shell.py`, `src/plan_execution.py`, `src/action_intents.py`, `routes/chat_routes.py` |
 | **Windows deployment** | One-command Docker/native launchers and Docker update helper for this install | `start.bat`, `start-native.bat`, `launch-windows.ps1`, `launch-docker.ps1`, `update_windows.bat` |
 | **Local context benchmark** | GPU VRAM sweep methodology, agent token budgets, and compose tuning for any NVIDIA/AMD card | `docs/context-benchmark.md`, `scripts/find_max_context.py`, `scripts/benchmark_context.py` |

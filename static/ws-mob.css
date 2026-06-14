@@ -6,6 +6,10 @@
 
    Bottom tab bar + up to 2 panels side by side with a drag handle.
 
+   ⚠ LAYOUT CONTRACT: AGENTS.md + docs/workspace-ide-layout.md
+   NEVER hide file tree / editor / terminal on DESKTOP. Rules here apply
+   ONLY under body.ws-mob-view (mobile). Must not leak to desktop IDE.
+
    ═══════════════════════════════════════════════════════════════════ */
 
 
@@ -82,36 +86,6 @@ body.ws-mob-view .hamburger-btn {
 
 }
 
-body.ws-mob-view .ws-mob-hamburger-slot .hamburger-btn {
-
-  position: static !important;
-
-  top: auto !important;
-
-  left: auto !important;
-
-  right: auto !important;
-
-  z-index: auto;
-
-  flex-shrink: 0;
-
-  width: 40px;
-
-  height: 40px;
-
-  min-width: 40px;
-
-  margin: 0;
-
-}
-
-body.ws-mob-view.ws-mob-hamburger-in-terminal .chat-top-bar {
-
-  padding-left: 6px !important;
-
-}
-
 body.ws-mob-view.doc-view .hamburger-btn,
 
 body.ws-mob-view:has(#notes-pane) .hamburger-btn {
@@ -120,9 +94,81 @@ body.ws-mob-view:has(#notes-pane) .hamburger-btn {
 
 }
 
-body.ws-mob-view .chat-top-bar {
+/* Left column panel reserves top-left space for the fixed hamburger (44px + 8px inset). */
+
+body.ws-mob-view[data-ws-mob-left="chat"] .chat-top-bar {
 
   padding-left: 48px !important;
+
+}
+
+body.ws-mob-view[data-ws-mob-left="files"] .ws-explorer-header {
+
+  padding-left: 48px !important;
+
+}
+
+body.ws-mob-view[data-ws-mob-left="editor"] #doc-editor-pane .doc-tab-bar,
+
+body.ws-mob-view[data-ws-mob-left="editor"] #doc-editor-pane .doc-md-toolbar {
+
+  padding-left: 48px !important;
+
+}
+
+/* Terminal left: fixed hamburger (8px + 44px) then exactly 5px before the title text. */
+
+body.ws-mob-view[data-ws-mob-left="terminal"] #ws-mob-terminal-panel .ws-terminal-dock-header {
+
+  padding-left: 0 !important;
+
+}
+
+body.ws-mob-view[data-ws-mob-left="terminal"] #ws-mob-terminal-panel .ws-terminal-dock-title-row {
+
+  padding-left: calc(8px + 44px + 5px) !important;
+
+}
+
+body.ws-mob-view #ws-mob-terminal-panel .ws-mob-hamburger-slot {
+
+  display: none !important;
+
+}
+
+/* Editor save/actions footer — scroll horizontally when split view is narrow. */
+
+body.ws-mob-view #doc-actions-footer {
+
+  overflow-x: auto;
+
+  overflow-y: hidden;
+
+  flex-wrap: nowrap;
+
+  justify-content: flex-start;
+
+  -webkit-overflow-scrolling: touch;
+
+  scrollbar-width: thin;
+
+  gap: 6px;
+
+}
+
+body.ws-mob-view #doc-actions-footer > * {
+
+  flex-shrink: 0;
+
+}
+
+body.ws-mob-view #doc-actions-footer #doc-save-split,
+
+body.ws-mob-view #doc-actions-footer .prometheus-source-label {
+
+  margin-left: 0 !important;
+
+  margin-right: 0 !important;
 
 }
 
@@ -234,9 +280,15 @@ body.ws-mob-view.ws-explorer-view .ws-terminal-dock {
 
   body.ws-mob-view .chat-top-bar {
 
-    padding: 4px 6px !important;
+    padding: 4px 6px 4px 6px !important;
 
     min-height: 32px !important;
+
+  }
+
+  body.ws-mob-view[data-ws-mob-left="chat"] .chat-top-bar {
+
+    padding-left: 48px !important;
 
   }
 
@@ -430,7 +482,37 @@ body:not(.ws-mob-view) #ws-mob-terminal-panel {
 
   min-width: 0;
 
-  gap: 6px;
+  display: flex;
+
+  align-items: center;
+
+  gap: 8px;
+
+}
+
+.ws-mob-terminal-panel .ws-terminal-dock-title-group {
+
+  flex: 1;
+
+  min-width: 0;
+
+  display: flex;
+
+  align-items: center;
+
+  justify-content: flex-start;
+
+  gap: 8px;
+
+  overflow: hidden;
+
+}
+
+.ws-mob-terminal-panel .ws-terminal-dock-title-group .prometheus-source-label {
+
+  overflow: hidden;
+
+  text-overflow: ellipsis;
 
 }
 
@@ -448,13 +530,7 @@ body:not(.ws-mob-view) #ws-mob-terminal-panel {
 
 .ws-mob-hamburger-slot {
 
-  display: flex;
-
-  align-items: center;
-
-  justify-content: center;
-
-  flex-shrink: 0;
+  display: none;
 
 }
 

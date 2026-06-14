@@ -36761,6 +36761,26 @@ body.ws-explorer-view .ws-terminal-dock .ws-terminal-mount {
     min-height: 96px;
   }
 }
+/* Safety net: stale mobile inline styles must never hide desktop IDE columns */
+body.ide-layout-desktop.ws-explorer-view:not(.ws-mob-view) #ws-explorer-pane {
+  display: grid !important;
+  visibility: visible !important;
+}
+body.ide-layout-desktop.ws-explorer-view:not(.ws-mob-view) #ws-workbench-column {
+  display: flex !important;
+  visibility: visible !important;
+}
+body.ide-layout-desktop.ws-explorer-view:not(.ws-mob-view) #ws-terminal-dock {
+  display: flex !important;
+  visibility: visible !important;
+}
+body.ide-layout-desktop.ws-explorer-view:not(.ws-mob-view) #doc-editor-pane,
+body.ide-layout-desktop.ws-explorer-view:not(.ws-mob-view) .ws-workbench-column #doc-editor-pane {
+  display: flex !important;
+  visibility: visible !important;
+  flex: 1 1 0 !important;
+  min-height: 120px !important;
+}
 }
 .ws-explorer-header {
   display: flex;

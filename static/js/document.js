@@ -462,8 +462,16 @@ import { refreshWsPanelResize } from './wsPanelResize.js';
       workspaceFiles.set(path, { path, content: content ?? '', dirty: false, workspace });
     }
     _syncWorkspaceFileTabsBodyClass();
+    if (document.body.classList.contains('ws-explorer-view')) {
+      document.body.classList.add('doc-view');
+    }
     _ensureDocPaneMounted();
     switchToWorkspaceFile(path);
+    if (document.body.classList.contains('ws-explorer-view')) {
+      try {
+        document.dispatchEvent(new CustomEvent('ws-adopt-editor-workbench'));
+      } catch (_) {}
+    }
   }
 
   // Project explorer opens files via event so it never depends on import order.
@@ -644,6 +652,23 @@ import { refreshWsPanelResize } from './wsPanelResize.js';
     const tabBar = document.getElementById('doc-tab-bar');
     if (!tabBar) return;
 
+    const curSession = sessionModule?.getCurrentSessionId() || '';
+    const filePart = [...workspaceFiles.entries()]
+      .map(([p, f]) => `${p}:${f.dirty ? 1 : 0}:${p === activeWorkspaceFile ? 1 : 0}`)
+      .join(';');
+    const docPart = [...docs.entries()]
+      .map(([id, doc]) => {
+        if (doc.sessionId && curSession && doc.sessionId !== curSession) return null;
+        const on = !activeWorkspaceFile && id === activeDocId ? 1 : 0;
+        return `${id}:${_tabDisplayTitle(doc).slice(0, 32)}:${on}`;
+      })
+      .filter(Boolean)
+      .join(';');
+    const snap = `${activeWorkspaceFile || ''}|${activeDocId || ''}|${filePart}|${docPart}|${isOpen ? 1 : 0}`;
+    if (snap === renderTabs._snap) return;
+    renderTabs._snap = snap;
+    renderTabs._lastScrollKey = '';
+
     // Build tab HTML with scroll arrows
     // When doc panel is on right (default), + goes on far left; on left, + goes inside scroll area
     const paneEl = document.querySelector('.doc-editor-pane');
@@ -651,7 +676,6 @@ import { refreshWsPanelResize } from './wsPanelResize.js';
     let html = '';
     html += '<button class="doc-tab-arrow doc-tab-arrow-left" id="doc-tab-left" title="Scroll left">&#x2039;</button>';
     html += '<div class="doc-tab-scroll" id="doc-tab-scroll">';
-    const curSession = sessionModule?.getCurrentSessionId() || '';
     let _anyTab = false;
     for (const [path, ft] of workspaceFiles) {
       _anyTab = true;
@@ -824,8 +848,11 @@ import { refreshWsPanelResize } from './wsPanelResize.js';
       });
     }
 
-    // Scroll active tab into view after DOM is laid out
+    // Scroll active tab into view after DOM is laid out (only when active tab changed).
     requestAnimationFrame(() => {
+      const activeKey = activeWorkspaceFile || activeDocId || '';
+      if (activeKey === renderTabs._lastScrollKey) return;
+      renderTabs._lastScrollKey = activeKey;
       const at = document.getElementById('doc-tab-scroll')?.querySelector('.doc-tab.active');
       _scrollTabIntoView(at, 'auto');
     });
@@ -4189,7 +4216,8 @@ import { refreshWsPanelResize } from './wsPanelResize.js';
   }
 
   export function openPanel() {
-    if (isOpen) return;
+    if (isOpen && document.getElementById('doc-editor-pane')) return;
+    if (isOpen) isOpen = false;
     // Clear any pane/divider still sliding out from a just-fired close so we
     // don't end up with two #doc-editor-pane nodes (and a stale close stripping
     // doc-view). Paired with the isOpen guard in _finishClose above.
@@ -5443,6 +5471,12 @@ import { refreshWsPanelResize } from './wsPanelResize.js';
     if ((docs.size === 0 || !activeDocId) && workspaceFiles.size === 0 && !activeWorkspaceFile) {
       showEmptyState();
     }
+
+    if (document.body.classList.contains('ws-explorer-view')) {
+      try {
+        document.dispatchEvent(new CustomEvent('ws-adopt-editor-workbench'));
+      } catch (_) {}
+    }
   }
 
   /** Apply markdown formatting to the textarea selection */
@@ -6439,9 +6473,16 @@ import { refreshWsPanelResize } from './wsPanelResize.js';
   // email modal): in that case openPanel() early-returns and nothing mounts, so
   // the doc silently never appears. Reset the stale flag and re-open for real.
   function _ensureDocPaneMounted() {
-    if (!isOpen || !document.getElementById('doc-editor-pane')) {
+    const pane = document.getElementById('doc-editor-pane');
+    if (!isOpen || !pane) {
       isOpen = false;
       openPanel();
+      return;
+    }
+    if (document.body.classList.contains('ws-explorer-view') && pane.parentNode?.id !== 'ws-workbench-column') {
+      try {
+        document.dispatchEvent(new CustomEvent('ws-adopt-editor-workbench'));
+      } catch (_) {}
     }
   }
 
