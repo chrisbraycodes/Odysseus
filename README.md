@@ -1,14 +1,56 @@
-# Prometheus Source — Odysseus workspace IDE with file tree, editor, terminal, and local LLM chat
+# Prometheus Source on Odysseus
 
-**Public production release** · **Prometheus Source** · [Christopher Bray](https://github.com/chrisbraycodes) · **YARB Industries LLC**
+**Production workspace IDE** · [prometheusource.org](https://prometheusource.org) · [Christopher Bray](https://github.com/chrisbraycodes) · **YARB Industries LLC**
 
-## Prometheus Source
+This repository ships **Prometheus Source** — a production integration and workspace layer — running on top of **[Odysseus](https://github.com/pewdiepie-archdaemon/odysseus)**, the upstream self-hosted AI workspace. The two names refer to different bodies of work. Use the tables below to see who made what.
 
-**Creator:** [Christopher Bray](https://github.com/chrisbraycodes) · **YARB Industries LLC**
+## Odysseus vs Prometheus Source
 
-Prometheus Source is Christopher Bray’s original workspace-IDE and deployment layer integrated on top of upstream Odysseus. The name **Prometheus Source** refers to that integration — the in-browser project workspace at `/workspace`, confined agent file/shell tooling, **Windows host terminal** (real PowerShell/CMD on your PC while Odysseus runs in Docker), Windows launchers, GPU context benchmarks, and related orchestration — not to the entire Odysseus application (chat, Cookbook, email, memory, and the core UI remain upstream unless listed below).
+| | **Odysseus** (upstream) | **Prometheus Source** (this project) |
+|---|-------------------------|--------------------------------------|
+| **What it is** | A self-hosted AI workspace: chat with local or API models, agents, tools, memory, email, research, and the core web UI | A **production workspace IDE** and **Windows deployment** layer integrated at `/workspace` — file tree, editor, terminal, host-shell bridge, launchers, and project-scoped agent tooling |
+| **Who made it** | The [Odysseus](https://github.com/pewdiepie-archdaemon/odysseus) open-source project and its contributors | **[Christopher Bray](https://github.com/chrisbraycodes)** · **[YARB Industries LLC](https://prometheusource.org)** |
+| **Home / docs** | [pewdiepie-archdaemon.github.io/odysseus](https://pewdiepie-archdaemon.github.io/odysseus/) · upstream `README` | [prometheusource.org](https://prometheusource.org) · this `README` (workspace + Windows sections) |
+| **This repo** | Base application, services, and UI (MIT) | Original additions listed in the [Prometheus Source component table](#prometheus-source-components) below |
 
-This repository is based on upstream Odysseus. The components below are Prometheus Source — original work by Christopher Bray (YARB Industries LLC) — integrated into this deployment:
+**In one sentence:** **Odysseus** is the self-hosted AI platform you run. **Prometheus Source** is Christopher Bray’s original work that turns it into a production project IDE on your machine — especially on **Windows + Docker**, where real **PowerShell/CMD**, npm, and Desktop bind mounts matter.
+
+### Made by Odysseus (upstream)
+
+These come from upstream Odysseus unless this README explicitly lists them under Prometheus Source:
+
+- **Chat** — local models, OpenAI-compatible APIs, presets, sessions
+- **Agent** — tool loop, MCP, web/file/shell tools, skills, memory integration
+- **Cookbook** — hardware scan, model download/serve (llmfit-derived)
+- **Deep Research** — multi-step research pipeline (Tongyi-derived)
+- **Compare** — blind multi-model comparison
+- **Documents** — multi-tab editor, markdown/HTML/CSV, AI-assisted edits (outside `/workspace` IDE)
+- **Memory / Skills** — ChromaDB vector memory, skill injection
+- **Email** — IMAP/SMTP inbox and AI triage
+- **Notes & Tasks** — reminders, scheduled agent tasks
+- **Calendar** — CalDAV sync
+- **Core UI** — settings, auth, themes, mobile/PWA shell, landing experience
+
+<sub>Upstream · [pewdiepie-archdaemon/odysseus](https://github.com/pewdiepie-archdaemon/odysseus) · see [ACKNOWLEDGMENTS.md](ACKNOWLEDGMENTS.md)</sub>
+
+### Made by Prometheus Source (Christopher Bray · YARB Industries LLC)
+
+Original work in this repository — **not** part of upstream Odysseus:
+
+- **Workspace IDE** (`/workspace`) — project file tree, workspace editor tabs, integrated xterm.js terminal, dev-server preview, desktop/mobile layout modes, layout persistence
+- **Windows host terminal** — real **PowerShell** or **CMD** on your PC while Odysseus stays in Docker; consent flow, shell picker, host agent, npm/node routing to the host
+- **Agent workspace tooling** — confined file/shell orchestration, per-workspace chats, project scan/index, plan execution tied to the active folder
+- **Windows deployment** — `start.bat`, `start-host-agent.bat`, `launch-docker.ps1`, host-agent auto-restart, `update_windows.bat`
+- **GPU context benchmark** — VRAM sweep methodology and agent token-budget tuning for *this* deployment ([docs/context-benchmark.md](docs/context-benchmark.md))
+- **Docker workspace mount** — `WORKSPACE_HOST_PATH`, `/workspace` bind-mount contract, host ↔ container path mapping
+
+<sub>Prometheus Source · Christopher Bray · YARB Industries LLC · [prometheusource.org](https://prometheusource.org)</sub>
+
+## Prometheus Source components
+
+**Creator:** [Christopher Bray](https://github.com/chrisbraycodes) · **YARB Industries LLC** · [prometheusource.org](https://prometheusource.org)
+
+Prometheus Source is Christopher Bray’s workspace-IDE and deployment integration on top of upstream Odysseus. The name **Prometheus Source** refers to that integration — not to the entire Odysseus application.
 
 | Area | What it is | Key paths |
 |------|------------|-----------|
@@ -21,34 +63,21 @@ This repository is based on upstream Odysseus. The components below are Promethe
 
 **Layout rule (agents & contributors):** on desktop, the file tree, editor, and terminal must never be hidden. See [AGENTS.md](AGENTS.md) and [docs/workspace-ide-layout.md](docs/workspace-ide-layout.md).
 
-Everything else — chat, agent loop, Cookbook, Deep Research, email, calendar, memory, and the core Odysseus UI — comes from upstream Odysseus unless noted above.
-
 ### Current state (June 2026)
 
-This fork is the **public production release** of **Prometheus Source on Odysseus** by **Christopher Bray** (**YARB Industries LLC**). What ships today:
+**Prometheus Source** public production release ([prometheusource.org](https://prometheusource.org)) on **Odysseus** by **Christopher Bray** (**YARB Industries LLC**):
 
-| Capability | Status |
-|------------|--------|
-| **Workspace IDE** | Production — desktop grid (file tree · editor · terminal · chat), mobile tab layout, workspace editor tabs, layout persistence |
-| **Windows host terminal** | Production — real **PowerShell** or **CMD** on your PC while Odysseus runs in Docker; shell picker in the terminal toolbar; `start.bat` **restarts** the host agent so code updates apply |
-| **Host agent + npm/node routing** | Production — agent exec and dev servers can run on the Windows host inside your workspace folder (scoped by default) |
-| **Per-workspace chats** | Production — switching project folders restores the chat bound to that workspace |
-| **Agent orchestration (local LLMs)** | Production — auto `write_file` batches, project scan + Chroma index, English “make a file” not routed to GNU `make` |
-| **Local LLM compatibility** | Production — fenced-tool defaults for llama.cpp/Ollama; tool-history flattening to avoid HTTP 422 on local OpenAI-compat servers |
-| **Deep workspace analysis** | Production — `workspace_index` / `workspace_search` tools, auto-injected scan context, rule-based fallback if the model returns empty after tools |
+| Capability | By | Status |
+|------------|-----|--------|
+| Chat, Agent, Cookbook, Research, Email, Calendar, Memory, core UI | **Odysseus** (upstream) | Inherited from upstream; configured in this deployment |
+| **Workspace IDE** | **Prometheus Source** | Production — desktop grid (file tree · editor · terminal · chat), mobile tabs, editor tabs |
+| **Windows host terminal** | **Prometheus Source** | Production — **PowerShell** or **CMD** on your PC; shell picker; `start.bat` restarts host agent |
+| **Host agent + npm/node on Windows** | **Prometheus Source** | Production — scoped exec on the Windows host |
+| **Per-workspace chats** | **Prometheus Source** | Production — chat bound to the active project folder |
+| **Agent workspace orchestration** | **Prometheus Source** | Production — file batches, project scan/index, local-LLM tool fixes |
+| **GPU context benchmark docs** | **Prometheus Source** | Production — [docs/context-benchmark.md](docs/context-benchmark.md) |
 
-**Prometheus Source** (Christopher Bray · YARB Industries LLC) — not upstream Odysseus:
-
-- Workspace IDE UI and layout contract (`/workspace`, `AGENTS.md`, `docs/workspace-ide-layout.md`)
-- Windows host terminal bridge (host agent, consent, PowerShell/CMD PTY, path mapping)
-- Windows launchers (`start.bat`, `start-host-agent.bat`, `launch-docker.ps1`, …)
-- Agent workspace tooling confined to the active project folder
-- GPU context benchmark docs and compose tuning helpers
-- Docker `/workspace` bind-mount and `WORKSPACE_HOST_PATH` overrides
-
-Everything else — core chat, Cookbook, Deep Research, email, calendar, memory, and the base Odysseus UI — remains **upstream Odysseus** unless listed above.
-
-After pulling: run `start.bat` on Windows (or `docker compose up -d --build odysseus`), hard-refresh the browser, pick a workspace folder, enable the Windows host terminal from chat if you need npm on your PC, then use **Agent** mode for file and analysis tasks.
+After pulling: run `start.bat` on Windows (or `docker compose up -d --build odysseus`), hard-refresh the browser, open **`/workspace`**, enable the Windows host terminal from chat if you need npm on your PC.
 
 ![Prometheus Source — Odysseus workspace IDE with file tree, editor, terminal, and local LLM chat](docs/images/prometheus-source-preview.png)
 
@@ -270,20 +299,23 @@ Native Windows does not use the `/workspace` Docker mount; pick a workspace fold
 in the UI from any path the server can read.
 
 ## Features
-  - **Chat** -- chat with any local model or API; adding them is super simple.<br>　<sub>vLLM · llama.cpp · Ollama · OpenRouter · OpenAI · GitHub Copilot</sub>
-  - **Agent** -- hand it tools and let it run the whole task itself.<br>　<sub>built on [opencode](https://github.com/anomalyco/opencode) · MCP · web · files · shell · skills · memory</sub>
-  - **Cookbook** -- Scans your hardware, recommends models, click to download and serve.. easy!<br>　<sub>built on [llmfit](https://github.com/AlexsJones/llmfit) · VRAM-aware · GGUF / FP8 / AWQ · fit scoring · vLLM / llama.cpp serving</sub>
-  - **Deep Research** -- multi-step runs that gather, read, and synthesize sources into a nice visual report.<br>　<sub>adapted from [Tongyi DeepResearch](https://github.com/Alibaba-NLP/DeepResearch)</sub>
-  - **Compare** -- a fun tool to compare models side by side. Test completely blind, no bias!<br>　<sub>multi-model · blind test · synthesis</sub>
-  - **Prometheus Source (Workspace IDE)** -- open a project folder and work in a full IDE layout: file tree, editor tabs, terminal, and live dev previews.<br>　<sub>Prometheus Source · Christopher Bray · YARB Industries LLC · `/workspace` · xterm.js · Desktop bind mount</sub>
-  - **Prometheus Source (Windows host terminal)** -- on Windows Docker, run a real **PowerShell** or **CMD** on your PC from the IDE terminal; npm, Vite, and dev servers execute on the host, not inside Linux.<br>　<sub>Prometheus Source · Christopher Bray · YARB Industries LLC · host agent · consent flow · shell picker</sub>
-  - **Documents** -- YOU write the text, AI is there to assist, not the opposite.<br>　<sub>multi-tab editor · markdown · HTML · CSV · syntax highlighting · AI edits · suggestions</sub>
-  - **Memory / Skills** -- Persistent memory and skills, your agent evolves over time as it better understands you and your tasks!<br>　<sub>ChromaDB · fastembed (ONNX) · vector + keyword retrieval · import/export</sub>
-  - **Email** -- IMAP/SMTP inbox with AI triage built in: urgency reminders, auto-tag, auto-summary, auto-reply drafts, auto-spam.<br>　<sub>IMAP · SMTP · per-account routing · CalDAV-aware</sub>
-  - **Notes & Tasks** -- Quick notes with reminders, a todo list, and scheduled tasks the agent can act on.<br>　<sub>note pings · checklist · cron-style tasks · ntfy / browser / email channels</sub>
-  - **Calendar** -- Local-first calendar with CalDAV sync to Radicale / Nextcloud / Apple / Fastmail.<br>　<sub>CalDAV pull · .ics import/export · per-calendar colors · agent-aware</sub>
-  - **Works on mobile** -- looks and runs great on your phone, not just desktop.<br>　<sub>responsive · installable (PWA) · touch gestures</sub>
-  - **Extras** -- more to explore, happy if you give it a go!<br>　<sub>image editor · theme editor · file uploads (vision + PDF) · web search · presets · sessions · 2FA</sub>
+
+Features are labeled by origin. **Odysseus** = upstream. **Prometheus Source** = Christopher Bray · YARB Industries LLC.
+
+  - **Chat** *(Odysseus)* — chat with any local model or API; adding them is super simple.<br>　<sub>vLLM · llama.cpp · Ollama · OpenRouter · OpenAI · GitHub Copilot</sub>
+  - **Agent** *(Odysseus)* — hand it tools and let it run the whole task itself.<br>　<sub>built on [opencode](https://github.com/anomalyco/opencode) · MCP · web · files · shell · skills · memory</sub>
+  - **Cookbook** *(Odysseus)* — Scans your hardware, recommends models, click to download and serve.. easy!<br>　<sub>built on [llmfit](https://github.com/AlexsJones/llmfit) · VRAM-aware · GGUF / FP8 / AWQ · fit scoring · vLLM / llama.cpp serving</sub>
+  - **Deep Research** *(Odysseus)* — multi-step runs that gather, read, and synthesize sources into a nice visual report.<br>　<sub>adapted from [Tongyi DeepResearch](https://github.com/Alibaba-NLP/DeepResearch)</sub>
+  - **Compare** *(Odysseus)* — a fun tool to compare models side by side. Test completely blind, no bias!<br>　<sub>multi-model · blind test · synthesis</sub>
+  - **Prometheus Source (Workspace IDE)** *(Prometheus Source)* — open a project folder and work in a full IDE layout: file tree, editor tabs, terminal, and live dev previews.<br>　<sub>Christopher Bray · YARB Industries LLC · [prometheusource.org](https://prometheusource.org) · `/workspace` · xterm.js · Desktop bind mount</sub>
+  - **Prometheus Source (Windows host terminal)** *(Prometheus Source)* — on Windows Docker, run real **PowerShell** or **CMD** on your PC from the IDE terminal; npm, Vite, and dev servers execute on the host, not inside Linux.<br>　<sub>Christopher Bray · YARB Industries LLC · host agent · consent flow · shell picker</sub>
+  - **Documents** *(Odysseus)* — YOU write the text, AI is there to assist, not the opposite.<br>　<sub>multi-tab editor · markdown · HTML · CSV · syntax highlighting · AI edits · suggestions</sub>
+  - **Memory / Skills** *(Odysseus)* — Persistent memory and skills, your agent evolves over time as it better understands you and your tasks!<br>　<sub>ChromaDB · fastembed (ONNX) · vector + keyword retrieval · import/export</sub>
+  - **Email** *(Odysseus)* — IMAP/SMTP inbox with AI triage built in: urgency reminders, auto-tag, auto-summary, auto-reply drafts, auto-spam.<br>　<sub>IMAP · SMTP · per-account routing · CalDAV-aware</sub>
+  - **Notes & Tasks** *(Odysseus)* — Quick notes with reminders, a todo list, and scheduled tasks the agent can act on.<br>　<sub>note pings · checklist · cron-style tasks · ntfy / browser / email channels</sub>
+  - **Calendar** *(Odysseus)* — Local-first calendar with CalDAV sync to Radicale / Nextcloud / Apple / Fastmail.<br>　<sub>CalDAV pull · .ics import/export · per-calendar colors · agent-aware</sub>
+  - **Works on mobile** *(Odysseus + Prometheus Source layout)* — responsive shell from Odysseus; workspace mobile tab layout from Prometheus Source.<br>　<sub>responsive · installable (PWA) · touch gestures</sub>
+  - **Extras** *(Odysseus)* — more to explore, happy if you give it a go!<br>　<sub>image editor · theme editor · file uploads (vision + PDF) · web search · presets · sessions · 2FA</sub>
 
 ## Demo
 A full, hover-to-play tour lives on the landing page (`docs/index.html`).
@@ -802,9 +834,12 @@ All user data lives in `data/` (gitignored): `app.db` (sessions, messages, docum
 </a>
 
 ## License
-MIT -- see [LICENSE](LICENSE) and [ACKNOWLEDGMENTS.md](ACKNOWLEDGMENTS.md).
 
-**Attribution:** The **Prometheus Source** workspace IDE, Windows host terminal, Windows launchers, agent workspace tooling, GPU context benchmark methodology, and related Docker/workspace integration in this repository are original work by **Christopher Bray** (**YARB Industries LLC**). Upstream Odysseus remains MIT-licensed separately; see [ACKNOWLEDGMENTS.md](ACKNOWLEDGMENTS.md) for third-party and upstream credits.
+MIT — see [LICENSE](LICENSE) and [ACKNOWLEDGMENTS.md](ACKNOWLEDGMENTS.md).
+
+**Odysseus (upstream)** is MIT-licensed open source from [pewdiepie-archdaemon/odysseus](https://github.com/pewdiepie-archdaemon/odysseus). Third-party and adapted components are credited in [ACKNOWLEDGMENTS.md](ACKNOWLEDGMENTS.md).
+
+**Prometheus Source** — the workspace IDE, Windows host terminal, Windows launchers, agent workspace tooling, GPU context benchmark methodology, and related Docker/workspace integration in this repository — is **original work by [Christopher Bray](https://github.com/chrisbraycodes) ([YARB Industries LLC](https://prometheusource.org))**. Learn more at [prometheusource.org](https://prometheusource.org).
 
 ```
                                   |
