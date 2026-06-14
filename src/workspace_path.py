@@ -79,6 +79,20 @@ def workspace_sync_info(resolved: str = "") -> dict:
         "sync_mode": "bind_mount" if in_docker and host_root else "",
         "dev_exec": (os.environ.get("WORKSPACE_DEV_EXEC") or ("host" if in_docker else "local")).strip().lower(),
     }
+    try:
+        from src.host_agent_client import host_agent_configured, host_agent_status_sync
+        from src.host_terminal_consent import host_terminal_enabled, host_terminal_unrestricted
+
+        info["host_agent_configured"] = host_agent_configured()
+        agent = host_agent_status_sync() if info["host_agent_configured"] else {"ok": False}
+        info["host_agent_reachable"] = bool(agent.get("ok"))
+        info["host_terminal_enabled"] = host_terminal_enabled(resolved if resolved else None)
+        info["host_terminal_unrestricted"] = host_terminal_unrestricted()
+    except Exception:
+        info["host_agent_configured"] = False
+        info["host_agent_reachable"] = False
+        info["host_terminal_enabled"] = False
+        info["host_terminal_unrestricted"] = False
     if resolved and in_docker:
         info["host_path"] = container_path_to_host(resolved) or ""
         info["container_path"] = display_workspace_path(resolved)

@@ -468,6 +468,7 @@ function createSessionItem(s) {
           await fetch(`${API_BASE}/api/session/${s.id}`, { method: 'PATCH', body: fd });
           s.name = newName;
           uiModule.showToast('Renamed');
+          if (window.chatTabBar?.updateTabTitle) window.chatTabBar.updateTabTitle(s.id, newName);
         }
         _forceSidebarOpen();
         renderSessionList();
@@ -730,6 +731,7 @@ function createSessionItem(s) {
         await fetch(`${API_BASE}/api/session/${s.id}`, { method: 'PATCH', body: fd });
         s.name = newName;
         uiModule.showToast('Renamed');
+        if (window.chatTabBar?.updateTabTitle) window.chatTabBar.updateTabTitle(s.id, newName);
       }
       _forceSidebarOpen();
       renderSessionList();
@@ -758,6 +760,7 @@ function createSessionItem(s) {
     if (wasCurrentSession && window.chatModule && window.chatModule.abortCurrentRequest) {
       window.chatModule.abortCurrentRequest();
     }
+    if (window.chatTabBar?.removeTab) window.chatTabBar.removeTab(s.id);
     _deselectCurrentSession(s.id);
     _removeSessionFromLocalState(s.id);
     _skipAutoSelect = true;
@@ -1594,7 +1597,12 @@ export async function loadSessions() {
   }
 }
 
-export async function selectSession(id, { keepSidebar = false } = {}) {
+export async function selectSession(id, { keepSidebar = false, fromTabBar = false } = {}) {
+  // Route sidebar / hash navigation through the tab bar when available
+  if (!fromTabBar && window.chatTabBar?.switchToSession) {
+    await window.chatTabBar.switchToSession(id, { keepSidebar });
+    return;
+  }
   // Exit compare mode cleanly if active
   if (window.compareModule && window.compareModule.isActive()) {
     window.compareModule.deactivate(true);
@@ -1862,6 +1870,10 @@ export async function selectSession(id, { keepSidebar = false } = {}) {
       const msgInput = document.getElementById('message');
       if (msgInput) msgInput.focus();
     }
+    if (fromTabBar && window.chatTabBar?.updateTabTitle) {
+      const _tabMeta = sessions.find(s => s.id === id);
+      window.chatTabBar.updateTabTitle(id, _tabMeta?.name);
+    }
   }
 }
 
@@ -1870,6 +1882,13 @@ let _pendingChat = null; // { url, modelId, endpointId }
 
 export function createDirectChat(url, modelId, endpointId) {
   _sessionNavToken++;
+  _skipAutoSelect = true;
+
+  if (window.chatTabBar?.openNewPendingTab) {
+    window.chatTabBar.openNewPendingTab({ url, modelId, endpointId }, 'New Chat');
+    return;
+  }
+
   // Detach any active stream so it doesn't interfere with the new chat
   if (window.chatModule && window.chatModule.detachCurrentStream) {
     window.chatModule.detachCurrentStream(currentSessionId);
@@ -1883,7 +1902,6 @@ export function createDirectChat(url, modelId, endpointId) {
 
   // Don't hit the API — just store the model info and prepare the UI
   _pendingChat = { url, modelId, endpointId };
-  _skipAutoSelect = true;
   currentSessionId = null;
   Storage.remove('lastSessionId');
   history.replaceState(null, '', window.location.pathname);
@@ -1982,11 +2000,18 @@ export async function materializePendingSession() {
   // Reload sidebar to show the new session — await it so the session
   // is fully registered before the caller proceeds (prevents race conditions)
   await loadSessions().catch(() => {});
+  if (window.chatTabBar?.onSessionMaterialized) {
+    window.chatTabBar.onSessionMaterialized(payload.id, name);
+  }
   return true;
 }
 
 export function hasPendingChat() { return !!_pendingChat; }
 export function getPendingChat() { return _pendingChat; }
+export function setPendingChat(v) {
+  _pendingChat = v;
+  if (window.chatTabBar?.setActivePending) window.chatTabBar.setActivePending(v);
+}
 // Getters for external access
 export function getCurrentSessionId() {
   return currentSessionId;
@@ -2350,8 +2375,8 @@ function _initAllDropdowns() {
   initModelPicker({
     getCurrentSessionId: () => currentSessionId,
     getSessions: () => sessions,
-    getPendingChat: () => _pendingChat,
-    setPendingChat: (v) => { _pendingChat = v; },
+    getPendingChat,
+    setPendingChat,
     createDirectChat,
   });
   _initDropdownDismiss();
@@ -3216,6 +3241,7 @@ const sessionModule = {
   materializePendingSession,
   hasPendingChat,
   getPendingChat,
+  setPendingChat,
   getCurrentSessionId,
   getSessions,
   getCurrentModel,

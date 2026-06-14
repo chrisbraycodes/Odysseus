@@ -92,6 +92,100 @@ def needs_npm_deps(cmd: str) -> bool:
     return bool(_NPM_NEEDS_DEPS_RE.search(cmd or ""))
 
 
+def package_json_scripts(workspace: str) -> dict:
+    """Return the ``scripts`` object from workspace/package.json, or {}."""
+    pkg = os.path.join(workspace, "package.json")
+    if not os.path.isfile(pkg):
+        return {}
+    try:
+        with open(pkg, encoding="utf-8") as f:
+            data = json.loads(f.read())
+        scripts = data.get("scripts") or {}
+        return scripts if isinstance(scripts, dict) else {}
+    except (OSError, json.JSONDecodeError, TypeError, ValueError):
+        return {}
+
+
+def _strip_prepared_command(cmd: str) -> str:
+    """Drop bg/host markers and a leading ``npm install &&`` chain."""
+    out = (cmd or "").strip()
+    if out.startswith("#@host-dev@#") or out.startswith("#@host-exec@#"):
+        out = out.split("\n", 1)[-1].strip()
+    if out.startswith("#!bg"):
+        out = out.split("\n", 1)[-1].strip()
+    if "&&" in out:
+        out = out.split("&&")[-1].strip()
+    return out
+
+
+def validate_node_workspace_command(cmd: str, workspace: Optional[str]) -> Optional[str]:
+    """Return an error message when a Node/dev command cannot succeed here.
+
+    Prevents pointless background jobs (e.g. ``npm start`` in a folder with no
+    ``start`` script) that weak models otherwise retry in a loop.
+    """
+    if not workspace or not (cmd or "").strip():
+        return None
+    core = _strip_prepared_command(cmd)
+    if not is_dev_server_command(core) and not needs_npm_deps(core):
+        return None
+
+    pkg_path = os.path.join(workspace, "package.json")
+    has_pkg = os.path.isfile(pkg_path)
+    scripts = package_json_scripts(workspace) if has_pkg else {}
+    available = ", ".join(sorted(str(k) for k in scripts.keys())) or "(none)"
+
+    m = re.match(r"^\s*npm\s+start\s*$", core, re.I)
+    if m:
+        if not has_pkg:
+            return (
+                f"Cannot run `npm start`: no package.json in `{workspace}`. "
+                "Scaffold a project first (e.g. `npx create-react-app <name>`)."
+            )
+        if not scripts.get("start"):
+            return (
+                f"Cannot run `npm start`: package.json has no `start` script "
+                f"(available: {available}). Use an existing script or scaffold first."
+            )
+        return None
+
+    m = re.match(r"^\s*npm\s+run\s+(\S+)", core, re.I)
+    if m:
+        script_name = m.group(1)
+        if not has_pkg:
+            return f"Cannot run `npm run {script_name}`: no package.json in `{workspace}`."
+        if script_name not in scripts:
+            return (
+                f"Cannot run `npm run {script_name}`: script not in package.json "
+                f"(available: {available})."
+            )
+        return None
+
+    m = re.match(r"^\s*(?:yarn|pnpm)\s+(?:run\s+)?(\S+)", core, re.I)
+    if m:
+        script_name = m.group(1)
+        if script_name.lower() in ("install", "add", "remove", "ci"):
+            return None
+        if not has_pkg:
+            return f"Cannot run that command: no package.json in `{workspace}`."
+        if script_name not in scripts:
+            return (
+                f"Cannot run `{core}`: script `{script_name}` not in package.json "
+                f"(available: {available})."
+            )
+        return None
+
+    if re.search(r"\bnpx\s+create-react-app\b", core, re.I):
+        return None
+
+    if is_dev_server_command(core) and not has_pkg:
+        return (
+            f"Cannot run `{core}`: no package.json in `{workspace}`. "
+            "Scaffold or cd into a Node project first."
+        )
+    return None
+
+
 def npm_deps_missing(workspace: str) -> bool:
     pkg = os.path.join(workspace, "package.json")
     if not os.path.isfile(pkg):
@@ -171,20 +265,36 @@ def host_dev_server_message(workspace: Optional[str], cmd: str) -> str:
     )
 
 
+def node_command_run_on_host(cmd: str) -> bool:
+    """True for npm/node/yarn/pnpm/vite commands that should run on the Windows host."""
+    return bool(needs_npm_deps(cmd) or is_dev_server_command(cmd))
+
+
+def _host_agent_can_run(workspace: Optional[str]) -> bool:
+    if not workspace or not dev_server_run_on_host():
+        return False
+    try:
+        from src.host_agent_client import host_agent_ready
+
+        return host_agent_ready(workspace)
+    except Exception:
+        return False
+
+
 def prepare_node_workspace_command(
     cmd: str, workspace: Optional[str]
 ) -> Tuple[str, Optional[str], bool]:
     """Normalize a bash command for workspace Node projects.
 
     Returns ``(prepared_command, preview_url, run_on_host)``.
-    When ``run_on_host`` is True, callers must not execute the dev-server
-    command inside the container.
+    When ``run_on_host`` is True, callers must not execute the command inside
+    the container — route it to the Windows host agent instead.
     """
     prepared = (cmd or "").strip()
     if not prepared or not workspace:
         return prepared, dev_server_preview_url(prepared), False
 
-    run_on_host = dev_server_run_on_host() and is_dev_server_command(prepared)
+    run_on_host = _host_agent_can_run(workspace) and node_command_run_on_host(prepared)
 
     install_prefix = ""
     if (

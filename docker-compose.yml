@@ -66,6 +66,9 @@ services:
       - WORKSPACE_HOST_ROOT=${WORKSPACE_HOST_PATH:-./workspace}
       # host = dev servers run on your computer (default); container = run inside Docker.
       - WORKSPACE_DEV_EXEC=${WORKSPACE_DEV_EXEC:-host}
+      - WORKSPACE_HOST_AGENT_URL=${WORKSPACE_HOST_AGENT_URL:-http://host.docker.internal:17789}
+      - WORKSPACE_HOST_AGENT_WS=${WORKSPACE_HOST_AGENT_WS:-ws://host.docker.internal:17790}
+      - WORKSPACE_HOST_AGENT_TOKEN=${WORKSPACE_HOST_AGENT_TOKEN:-}
       - ODYSSEUS_WORKSPACE_ROOT=/workspace
       # PUID / PGID — the user/group the container drops to before
       # running uvicorn (entrypoint also chowns /app/data + /app/logs

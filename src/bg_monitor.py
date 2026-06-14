@@ -114,6 +114,13 @@ async def _run_followup(rec: dict) -> bool:
                 "invalid, run `rm -rf <name>` in bash ONCE, then retry "
                 "`npx create-react-app <name>` ONCE. Do not loop."
             )
+        result_body = bg_jobs.result_text(rec).lower()
+        if "missing script" in result_body:
+            hints.append(
+                "The workspace has no matching npm script. Do NOT retry `npm start`. "
+                "Run `ls`, find the project subfolder with package.json, `cd` there, "
+                "or scaffold with `npx create-react-app <name>` first."
+            )
         hints.append(
             "No tutorials or troubleshooting essays — use ```bash``` to fix and verify."
         )

@@ -68,6 +68,7 @@ export async function openWorkspaceSavePicker(anchorRect, {
   title = 'Save to workspace',
   confirmText = 'Save here',
   initialPath = '',
+  itemType = 'file',
 } = {}) {
   _closeMenu();
   await whenWorkspaceReady();
@@ -119,7 +120,9 @@ export async function openWorkspaceSavePicker(anchorRect, {
         html += `<button type="button" class="doc-save-menu-row doc-save-menu-dir" data-path="${_esc(d.path)}">${_esc(d.name)}/</button>`;
       }
       if (!html) {
-        html = '<div class="doc-save-menu-empty">No subfolders — save file in this folder below.</div>';
+        html = isFolder
+          ? '<div class="doc-save-menu-empty">No subfolders — create the folder below.</div>'
+          : '<div class="doc-save-menu-empty">No subfolders — save file in this folder below.</div>';
       }
       listEl.innerHTML = html;
       listEl.querySelector('.doc-save-menu-up')?.addEventListener('click', (e) => {
@@ -137,10 +140,20 @@ export async function openWorkspaceSavePicker(anchorRect, {
     }
   }
 
+  const isFolder = itemType === 'folder';
+  nameInput.placeholder = isFolder ? 'folder name' : 'filename';
+
   async function commitSave() {
     const name = (nameInput.value || '').trim().replace(/\\/g, '/').split('/').pop();
     if (!name || name === '.' || name === '..') {
-      if (uiModule?.showError) uiModule.showError('Enter a file name');
+      if (uiModule?.showError) {
+        uiModule.showError(isFolder ? 'Enter a folder name' : 'Enter a file name');
+      }
+      nameInput.focus();
+      return;
+    }
+    if (isFolder && name.includes('/')) {
+      if (uiModule?.showError) uiModule.showError('Folder name cannot contain /');
       nameInput.focus();
       return;
     }

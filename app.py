@@ -399,7 +399,9 @@ from routes.shell_routes import setup_shell_routes
 app.include_router(setup_shell_routes())
 
 # Workspace terminal (interactive PTY over WebSocket)
+from routes.host_terminal_routes import setup_host_terminal_routes
 from routes.terminal_routes import setup_terminal_routes
+app.include_router(setup_host_terminal_routes())
 app.include_router(setup_terminal_routes())
 
 # Cookbook (model download/serve/cache, cookbook state sync)

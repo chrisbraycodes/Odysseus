@@ -18,6 +18,7 @@ import spinnerModule from './spinner.js';
 import themeModule from './theme.js';
 import documentModule from './document.js';
 import workspaceModule from './workspace.js';
+import { enableHostTerminalFromChat } from './hostTerminal.js';
 import settingsModule from './settings.js';
 import cookbookModule from './cookbook.js';
 import { EVAL_PROMPTS } from './compare/index.js';
@@ -1167,7 +1168,14 @@ async function _cmdWorkspace(args, ctx) {
     workspaceModule.openWorkspaceBrowser();
     return true;
   }
-  slashReply('Usage: <code>/workspace</code> · <code>set /path</code> · <code>clear</code> · <code>pick</code>');
+  if (sub === 'host-terminal' || sub === 'host' || sub === 'win-terminal') {
+    const ok = await enableHostTerminalFromChat();
+    slashReply(ok
+      ? 'Windows host terminal enabled — npm/dev servers and the IDE terminal now run on your computer.'
+      : 'Host terminal was not enabled.');
+    return true;
+  }
+  slashReply('Usage: <code>/workspace</code> · <code>set /path</code> · <code>clear</code> · <code>pick</code> · <code>host-terminal</code>');
   return true;
 }
 // Plan mode: drive the real toggle pill (#plan-toggle-btn) so its per-mode
@@ -5516,7 +5524,7 @@ const COMMANDS = {
     help: 'Set the folder the agent works in',
     handler: _cmdWorkspace,
     noUserBubble: true,
-    usage: '/workspace [set <path> | clear | pick]',
+    usage: '/workspace [set <path> | clear | pick | host-terminal]',
   },
   plan: {
     alias: [],

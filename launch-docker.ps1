@@ -25,7 +25,9 @@ function Fail($msg) {
     Write-Host ""
     Write-Host ("ERROR: " + $msg) -ForegroundColor Red
     Write-Host ""
-    Read-Host "Press Enter to exit"
+    if (-not $NoBrowser -and [Environment]::UserInteractive) {
+        Read-Host "Press Enter to exit"
+    }
     exit 1
 }
 
@@ -55,6 +57,55 @@ function Ensure-EnvFile {
         Add-Content -Path $envFile -Value "`nCOMPOSE_PROJECT_NAME=odysseus"
         Write-Host "Set COMPOSE_PROJECT_NAME=odysseus in .env (stable Docker project name)" -ForegroundColor Yellow
     }
+    Ensure-HostAgentToken -EnvFile $envFile
+}
+
+function Ensure-HostAgentToken {
+    param([string]$EnvFile)
+    $lines = @(Get-Content $EnvFile -ErrorAction SilentlyContinue)
+    $existing = $lines | Where-Object { $_ -match '^\s*WORKSPACE_HOST_AGENT_TOKEN\s*=\s*(\S+)\s*$' } | Select-Object -First 1
+    if ($existing -and ($existing -replace '^\s*WORKSPACE_HOST_AGENT_TOKEN\s*=\s*', '').Trim()) {
+        return
+    }
+    $token = [guid]::NewGuid().ToString('N')
+    Add-Content -Path $EnvFile -Value "WORKSPACE_HOST_AGENT_TOKEN=$token"
+    Write-Host "Generated WORKSPACE_HOST_AGENT_TOKEN in .env" -ForegroundColor Yellow
+}
+
+function Ensure-HostAgentVenv {
+    # Kept for backwards compatibility; start-host-agent.bat owns venv setup now.
+    $bat = Join-Path $PSScriptRoot "start-host-agent.bat"
+    if (Test-Path $bat) { return }
+    $venv = Join-Path $PSScriptRoot ".host-agent-venv"
+    $python = Join-Path $venv "Scripts\python.exe"
+    if (-not (Test-Path $python)) {
+        Write-Host "Creating host agent virtualenv..." -ForegroundColor Yellow
+        & python -m venv $venv
+        if ($LASTEXITCODE -ne 0) { Fail "Could not create .host-agent-venv - install Python 3." }
+    }
+    $req = Join-Path $PSScriptRoot "scripts\host_agent_requirements.txt"
+    & $python -m pip install -q -r $req
+    if ($LASTEXITCODE -ne 0) { Fail "Could not install host agent dependencies." }
+}
+
+function Start-HostAgent {
+    $bat = Join-Path $PSScriptRoot "start-host-agent.bat"
+    if (-not (Test-Path $bat)) {
+        Write-Host "Warning: missing start-host-agent.bat - host terminal disabled" -ForegroundColor Yellow
+        return $false
+    }
+    $sw = [System.Diagnostics.Stopwatch]::StartNew()
+    # Invoke via cmd /c (not Start-Process -Wait -NoNewWindow) so a detached pythonw child
+    # does not keep the launcher blocked on the shared console.
+    & cmd.exe /c "`"$bat`" -NoPause"
+    $exitCode = $LASTEXITCODE
+    $sw.Stop()
+    if ($exitCode -eq 0) {
+        Write-Host ("Windows host agent ready ({0} ms)" -f $sw.ElapsedMilliseconds) -ForegroundColor Green
+        return $true
+    }
+    Write-Host ("Warning: host agent did not start (exit {0}, {1} ms) - see logs/host-agent.log" -f $exitCode, $sw.ElapsedMilliseconds) -ForegroundColor Yellow
+    return $false
 }
 
 function Ensure-RuntimeDirs {
@@ -254,6 +305,8 @@ if (-not (Test-Path $composeFile)) {
 
 Ensure-EnvFile
 Ensure-RuntimeDirs
+Write-Step "Starting Windows host agent"
+Start-HostAgent | Out-Null
 
 $requiredServices = @('odysseus', 'chromadb', 'searxng', 'ntfy')
 $stackPorts = @(7000, 8080, 8100, 8091)
@@ -299,7 +352,11 @@ if (-not (Wait-ForHttp $url)) {
 Write-Host ""
 Write-Host "Odysseus is running at $url" -ForegroundColor Green
 Write-Host "Workspace: /workspace (your Desktop is mounted there in the container)." -ForegroundColor DarkGray
+Write-Host "Enable the Windows host terminal from chat for npm/dev servers on your computer." -ForegroundColor DarkGray
 Write-Host ""
+
+Write-Step "Ensuring Windows host agent is running"
+Start-HostAgent | Out-Null
 
 if (-not $NoBrowser) {
     try { Start-Process $url } catch { Write-Host "Open $url in your browser." -ForegroundColor Yellow }

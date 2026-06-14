@@ -162,6 +162,19 @@ async def run_auto_shell_for_command(
     cmd = command.strip()
     effective_ws = resolve_effective_workspace(workspace, user_msg, approved_plan)
 
+    from src.workspace_dev import validate_node_workspace_command
+
+    validation_err = validate_node_workspace_command(cmd, effective_ws)
+    if validation_err:
+        return AutoShellResult(
+            command=cmd,
+            desc="bash (auto): rejected",
+            result={"error": validation_err, "exit_code": 1},
+            workspace=effective_ws,
+            skip_llm=True,
+            assistant_message=validation_err,
+        )
+
     from src.tool_execution import execute_tool_block
 
     if cmd.strip().lower() == "pwd":

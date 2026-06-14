@@ -1,6 +1,8 @@
 // static/js/workspaceTerminal.js
 //
-// Interactive workspace terminal — xterm.js over WebSocket PTY.
+// Interactive workspace terminal — xterm.js over WebSocket PTY (container or Windows host).
+
+import { fetchHostTerminalStatus, isHostTerminalActive, isHostTerminalEnabled, getHostTerminalShell, saveHostTerminalShell } from './hostTerminal.js';
 
 // Bundled locally — jsdelivr ESM imports hang/fail on many networks.
 const XTERM_BASE = '/static/lib/xterm';
@@ -190,6 +192,48 @@ export function createWorkspaceTerminal(mountEl, opts) {
   clipGroup.appendChild(pasteBtn);
   toolbar.appendChild(clipGroup);
 
+  const shellWrap = document.createElement('div');
+  shellWrap.className = 'ws-terminal-shell-wrap';
+  shellWrap.hidden = true;
+  const shellLabel = document.createElement('label');
+  shellLabel.className = 'ws-terminal-shell-label';
+  shellLabel.textContent = 'Shell';
+  const shellSelect = document.createElement('select');
+  shellSelect.className = 'ws-terminal-shell-select';
+  shellSelect.title = 'Windows host shell (PowerShell or CMD)';
+  shellSelect.innerHTML = '<option value="powershell">PowerShell</option><option value="cmd">CMD</option>';
+  shellLabel.appendChild(shellSelect);
+  shellWrap.appendChild(shellLabel);
+  toolbar.appendChild(shellWrap);
+
+  let hostShell = 'powershell';
+  let hostUnrestricted = false;
+
+  async function _syncShellToolbar(status) {
+    const show = isHostTerminalEnabled(status);
+    shellWrap.hidden = !show;
+    if (!show) return;
+    hostShell = getHostTerminalShell(status);
+    hostUnrestricted = !!status?.host_terminal_unrestricted;
+    shellSelect.value = hostShell;
+  }
+
+  shellSelect.addEventListener('change', async () => {
+    const next = shellSelect.value === 'cmd' ? 'cmd' : 'powershell';
+    if (next === hostShell) return;
+    try {
+      setStatus('Saving shell preference…', 'loading');
+      await saveHostTerminalShell(next, { workspace, unrestricted: hostUnrestricted });
+      hostShell = next;
+      sessionId = '';
+      await connect();
+    } catch (err) {
+      shellSelect.value = hostShell;
+      setStatus(err.message || 'Could not save shell preference', 'error');
+      reconnectBtn.style.display = '';
+    }
+  });
+
   const reconnectBtn = document.createElement('button');
   reconnectBtn.type = 'button';
   reconnectBtn.className = 'ws-terminal-reconnect';
@@ -287,18 +331,37 @@ export function createWorkspaceTerminal(mountEl, opts) {
     await _ensureTerm();
     setStatus('Connecting…', 'loading');
 
+    let useHost = false;
+    try {
+      const status = await fetchHostTerminalStatus(workspace);
+      useHost = isHostTerminalActive(status);
+      await _syncShellToolbar(status);
+      if (useHost) hostShell = getHostTerminalShell(status);
+    } catch (_) {
+      useHost = false;
+      shellWrap.hidden = true;
+    }
+
     const params = new URLSearchParams({
       workspace,
       cols: String(term.cols),
       rows: String(term.rows),
     });
+    if (useHost) {
+      params.set('host', '1');
+      params.set('shell', hostShell);
+    }
     if (sessionId) params.set('session', sessionId);
 
     socket = new WebSocket(`${_wsBase()}/api/terminal/ws?${params}`);
     socket.binaryType = 'arraybuffer';
 
     socket.addEventListener('open', () => {
-      setStatus('Starting shell…', 'loading');
+      const shellName = hostShell === 'cmd' ? 'CMD' : 'PowerShell';
+      setStatus(
+        useHost ? `Starting Windows ${shellName}…` : 'Starting shell…',
+        'loading',
+      );
       _sendResize();
     });
 

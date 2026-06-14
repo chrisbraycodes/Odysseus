@@ -342,6 +342,42 @@ def setup_workspace_routes():
             "size": len(body.content.encode("utf-8")),
         }
 
+    class _MkdirBody(BaseModel):
+        workspace: str
+        path: str
+
+    @router.post("/mkdir")
+    def mkdir_path(request: Request, body: _MkdirBody):
+        """Create a directory inside the workspace."""
+        _require_workspace_admin(request)
+        root = _resolve_workspace_root(body.workspace)
+        rel = (body.path or "").strip().replace("\\", "/").strip("/")
+        if not rel:
+            raise HTTPException(status_code=400, detail="path is required")
+        if rel.endswith("/"):
+            rel = rel.rstrip("/")
+        try:
+            target = _resolve_tool_path_in_workspace(root, rel)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        if os.path.lexists(target):
+            raise HTTPException(status_code=409, detail="path already exists")
+        parent = os.path.dirname(target)
+        if parent:
+            try:
+                os.makedirs(parent, exist_ok=True)
+            except OSError as exc:
+                raise HTTPException(status_code=500, detail=str(exc)) from exc
+        try:
+            os.mkdir(target)
+        except OSError as exc:
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+        return {
+            "workspace": root,
+            "path": _rel_to_workspace(root, target),
+            "created": True,
+        }
+
     @router.delete("/file")
     def delete_path(
         request: Request,

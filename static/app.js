@@ -6,6 +6,7 @@ import Storage from './js/storage.js';
 import uiModule from './js/ui.js';
 import workspaceModule from './js/workspace.js';
 import workspaceExplorerModule from './js/workspaceExplorer.js';
+import hostTerminalModule from './js/hostTerminal.js';
 import fileHandlerModule from './js/fileHandler.js';
 import modelsModule from './js/models.js';
 import ragModule from './js/rag.js';
@@ -19,6 +20,7 @@ import { makeWindowDraggable } from './js/windowDrag.js';
 import markdownModule from './js/markdown.js';
 import chatRenderer from './js/chatRenderer.js';
 import sessionModule from './js/sessions.js';
+import chatTabBar from './js/chatTabBar.js';
 import memoryModule from './js/memory.js';
 import voiceRecorderModule from './js/voiceRecorder.js';
 import censorModule from './js/censor.js';
@@ -50,6 +52,7 @@ import { initSectionCollapse, initSectionDrag } from './js/section-management.js
 const API_BASE = window.location.origin;
 window.themeModule = themeModule;
 window.sessionModule = sessionModule;
+window.chatTabBar = chatTabBar;
 window.uiModule = uiModule;
 window.adminModule = adminModule;
 window.cookbookModule = cookbookModule;
@@ -1607,6 +1610,7 @@ function initializeEventListeners() {
   setupToggle('web-toggle-btn', 'web-toggle', 'web');
   setupToggle('bash-toggle-btn', 'bash-toggle', 'bash');
   try { workspaceModule.initWorkspace(); } catch (_) {}
+  try { hostTerminalModule.initHostTerminalUi(); } catch (_) {}
   setupToggle('plan-toggle-btn', 'plan-toggle', 'plan');
 
   // Set plan mode on/off directly (checkbox + button state + saved pref) WITHOUT
@@ -1682,6 +1686,7 @@ function initializeEventListeners() {
   })();
 
   try { workspaceModule.initWorkspace(); } catch (_) {}
+  try { hostTerminalModule.initHostTerminalUi(); } catch (_) {}
   try { workspaceExplorerModule.initWorkspaceExplorer(); } catch (_) {}
 
   // Document editor toggle (special: uses module panel, not a checkbox)
@@ -3368,6 +3373,7 @@ function startOdysseusApp() {
   searchModule.init(API_BASE);
   chatModule.init(API_BASE);
   chatModule.initListeners();
+  chatTabBar.init();
   groupModule.init(API_BASE);
   // Initialize compare module
   if (compareModule) {

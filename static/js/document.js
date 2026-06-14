@@ -503,6 +503,17 @@ import { refreshWsPanelResize } from './wsPanelResize.js';
     closeWorkspaceFileTab(path, { force: true });
   }
 
+  /** Close every open workspace tab under a deleted folder (prefix match). */
+  export function removeWorkspaceFileTabsUnder(prefix) {
+    const base = String(prefix || '').replace(/\\/g, '/').replace(/^\/+|\/+$/g, '');
+    for (const path of [...workspaceFiles.keys()]) {
+      const norm = path.replace(/\\/g, '/');
+      if (!base || norm === base || norm.startsWith(`${base}/`)) {
+        closeWorkspaceFileTab(path, { force: true });
+      }
+    }
+  }
+
   const _docOpenKey = (sessionId) => 'odysseus-doc-open-' + sessionId;
   const _docMinimizedKey = (sessionId) => 'odysseus-doc-minimized-' + sessionId;
 

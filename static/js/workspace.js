@@ -7,6 +7,7 @@
 import Storage, { KEYS } from './storage.js';
 import uiModule from './ui.js';
 import { makeWindowDraggable } from './windowDrag.js';
+import { confirmWorkspaceRiskIfNeeded } from './hostTerminal.js';
 
 const API_BASE = window.location.origin;
 export const WORKSPACE_VERIFIED_EVENT = 'workspace-verified';
@@ -364,7 +365,8 @@ function _getModal() {
       <div class="workspace-docker-hint" id="workspace-docker-hint" style="display:none">
         <span id="workspace-sync-hint"></span>
         Pick a folder under <code>/workspace</code>, paste the matching folder from your computer, or use Import to copy files in.
-        Dev servers run on your computer when <code>WORKSPACE_DEV_EXEC=host</code> (default in Docker).
+        Dev servers and npm run on your Windows computer when the
+        <a href="#" id="workspace-enable-host-terminal">Windows host terminal</a> is enabled.
       </div>
       <input type="text" class="styled-prompt-input workspace-cur" id="workspace-cur-path"
              spellcheck="false" autocomplete="off" autocapitalize="off" autocorrect="off"
@@ -394,6 +396,10 @@ function _getModal() {
   });
   _modal.querySelector('#workspace-use').addEventListener('click', async () => {
     try {
+      if (_dockerWorkspace) {
+        const ok = await confirmWorkspaceRiskIfNeeded({ docker: true });
+        if (!ok) return;
+      }
       const n = await normalizeWorkspace(_curPath, { notify: true });
       if (!n.valid) {
         if (uiModule?.showError) {
@@ -444,6 +450,10 @@ function _getModal() {
   _modal.querySelector('#workspace-go-root').addEventListener('click', () => {
     const root = _defaultRoot || (_dockerWorkspace ? '/workspace' : '');
     if (root) _navigate(root);
+  });
+  _modal.querySelector('#workspace-enable-host-terminal')?.addEventListener('click', (e) => {
+    e.preventDefault();
+    import('./hostTerminal.js').then((m) => m.enableHostTerminalFromChat());
   });
   const content = _modal.querySelector('.modal-content');
   const header = _modal.querySelector('.modal-header');

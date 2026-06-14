@@ -31,6 +31,7 @@ const _DELETE_ICON = '<svg class="ws-tree-action-icon" width="12" height="12" vi
 const _DOWNLOAD_ICON = '<svg class="ws-tree-action-icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>';
 const _IMPORT_ICON = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>';
 const _NEW_FILE_ICON = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>';
+const _NEW_FOLDER_ICON = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><line x1="12" y1="11" x2="12" y2="17"/><line x1="9" y1="14" x2="15" y2="14"/></svg>';
 
 let _pane = null;
 let _workbenchCol = null;
@@ -140,10 +141,32 @@ async function _fetchFile(workspace, path) {
   return res.json();
 }
 
-async function _fileExists(workspace, relPath) {
-  const qs = new URLSearchParams({ workspace, path: relPath });
-  const res = await fetch(`${API_BASE}/api/workspace/file?${qs}`, { credentials: 'same-origin' });
-  return res.ok;
+async function _pathExists(workspace, relPath) {
+  const parent = relPath.includes('/')
+    ? relPath.replace(/\\/g, '/').replace(/\/[^/]+$/, '')
+    : '';
+  const name = _basename(relPath);
+  try {
+    const data = await _fetchList(workspace, parent);
+    return (data.dirs || []).some((d) => d.name === name)
+      || (data.files || []).some((f) => f.name === name);
+  } catch (_) {
+    return false;
+  }
+}
+
+async function _mkdir(workspace, relPath) {
+  const res = await fetch(`${API_BASE}/api/workspace/mkdir`, {
+    method: 'POST',
+    credentials: 'same-origin',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ workspace, path: relPath }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(_apiErrorDetail(err, `mkdir failed: ${res.status}`));
+  }
+  return res.json();
 }
 
 async function _writeFile(workspace, relPath, content = '') {
@@ -269,7 +292,15 @@ async function _deleteEntry(relPath, { isDir = false } = {}) {
   if (!await _confirmDelete(name, { isDir, recursive })) return;
   try {
     await _deletePath(root, relPath, { recursive });
-    _docMod()?.removeWorkspaceFileTab?.(relPath);
+    if (isDir) {
+      _docMod()?.removeWorkspaceFileTabsUnder?.(relPath);
+      const norm = relPath.replace(/\\/g, '/');
+      for (const p of [..._expanded]) {
+        if (p === norm || p.startsWith(`${norm}/`)) _expanded.delete(p);
+      }
+    } else {
+      _docMod()?.removeWorkspaceFileTab?.(relPath);
+    }
     if (_expanded.has(relPath)) _expanded.delete(relPath);
     if (uiModule.showToast) uiModule.showToast(`Deleted ${name}`);
     _loadTree(_treePath);
@@ -509,17 +540,21 @@ async function _openFileAt(relPath) {
   }
 }
 
-function _createNewFile() {
-  const btn = _pane?.querySelector('#ws-explorer-new-file');
-  const rect = btn?.getBoundingClientRect?.()
+function _createPickerAnchor() {
+  const btn = _pane?.querySelector('#ws-explorer-new');
+  return btn?.getBoundingClientRect?.()
     || { left: 0, top: 0, bottom: 0, right: 0, width: 0, height: 0 };
-  openWorkspaceSavePicker(rect, {
+}
+
+function _createNewFile() {
+  openWorkspaceSavePicker(_createPickerAnchor(), {
     defaultFilename: 'untitled.txt',
     initialPath: _treePath || '',
     title: 'New file',
     confirmText: 'Create',
+    itemType: 'file',
     onSave: async (relPath, workspace) => {
-      if (await _fileExists(workspace, relPath)) {
+      if (await _pathExists(workspace, relPath)) {
         throw new Error(`"${_basename(relPath)}" already exists — choose another name`);
       }
       await _writeFile(workspace, relPath, '');
@@ -528,6 +563,79 @@ function _createNewFile() {
       _loadTree(_treePath);
     },
   });
+}
+
+function _createNewFolder() {
+  openWorkspaceSavePicker(_createPickerAnchor(), {
+    defaultFilename: 'newfolder',
+    initialPath: _treePath || '',
+    title: 'New folder',
+    confirmText: 'Create',
+    itemType: 'folder',
+    onSave: async (relPath, workspace) => {
+      if (await _pathExists(workspace, relPath)) {
+        throw new Error(`"${_basename(relPath)}" already exists — choose another name`);
+      }
+      await _mkdir(workspace, relPath);
+      _expanded.add(relPath);
+      if (uiModule.showToast) uiModule.showToast(`Created folder ${_basename(relPath)}`);
+      _loadTree(_treePath);
+    },
+  });
+}
+
+let _createMenu = null;
+let _createMenuOutside = null;
+
+function _closeCreateMenu() {
+  if (_createMenuOutside) {
+    document.removeEventListener('mousedown', _createMenuOutside, true);
+    _createMenuOutside = null;
+  }
+  _createMenu?.remove();
+  _createMenu = null;
+}
+
+function _openCreateMenu() {
+  if (!_wsRoot()) {
+    if (uiModule.showError) uiModule.showError('Pick a workspace folder first');
+    return;
+  }
+  _closeCreateMenu();
+  const btn = _pane?.querySelector('#ws-explorer-new');
+  if (!btn) return;
+  const rect = btn.getBoundingClientRect();
+  const menu = document.createElement('div');
+  menu.className = 'ws-explorer-create-menu dropdown';
+  menu.innerHTML = `
+    <button type="button" class="ws-explorer-create-item" data-kind="file">${_NEW_FILE_ICON}<span>New file</span></button>
+    <button type="button" class="ws-explorer-create-item" data-kind="folder">${_NEW_FOLDER_ICON}<span>New folder</span></button>`;
+  document.body.appendChild(menu);
+  _createMenu = menu;
+  menu.style.position = 'fixed';
+  menu.style.zIndex = '1200';
+  const margin = 8;
+  let top = rect.bottom + 4;
+  let left = rect.left;
+  if (left + menu.offsetWidth > window.innerWidth - margin) {
+    left = window.innerWidth - menu.offsetWidth - margin;
+  }
+  menu.style.left = `${Math.max(margin, left)}px`;
+  menu.style.top = `${top}px`;
+  menu.querySelector('[data-kind="file"]')?.addEventListener('click', () => {
+    _closeCreateMenu();
+    _createNewFile();
+  });
+  menu.querySelector('[data-kind="folder"]')?.addEventListener('click', () => {
+    _closeCreateMenu();
+    _createNewFolder();
+  });
+  _createMenuOutside = (e) => {
+    if (_createMenu && !_createMenu.contains(e.target) && e.target !== btn) {
+      _closeCreateMenu();
+    }
+  };
+  document.addEventListener('mousedown', _createMenuOutside, true);
 }
 
 function _ensureMobileTerminalPanel() {
@@ -577,7 +685,7 @@ function _buildPane() {
         <span class="ws-explorer-title">Project files</span>
       </div>
       <div class="ws-explorer-header-actions">
-        <button type="button" class="ws-explorer-btn" id="ws-explorer-new-file" title="New file">${_NEW_FILE_ICON}</button>
+        <button type="button" class="ws-explorer-btn" id="ws-explorer-new" title="New file or folder">${_NEW_FILE_ICON}</button>
         <button type="button" class="ws-explorer-btn" id="ws-explorer-import" title="Import file from your computer">${_IMPORT_ICON}</button>
         <button type="button" class="ws-explorer-btn" id="ws-explorer-refresh" title="Refresh">↻</button>
         <button type="button" class="ws-explorer-btn" id="ws-explorer-close" title="Close panel">✕</button>
@@ -595,7 +703,10 @@ function _buildPane() {
     </div>`;
 
   _pane.querySelector('#ws-explorer-close').addEventListener('click', () => closePanel());
-  _pane.querySelector('#ws-explorer-new-file').addEventListener('click', () => _createNewFile());
+  _pane.querySelector('#ws-explorer-new').addEventListener('click', (e) => {
+    e.stopPropagation();
+    _openCreateMenu();
+  });
   _pane.querySelector('#ws-explorer-refresh').addEventListener('click', () => {
     if (_wsRoot()) _loadTree(_treePath);
   });
@@ -1001,6 +1112,7 @@ export async function openPanel({ promptWorkspace = false } = {}) {
 
 export function closePanel() {
   if (!_isOpen) return;
+  _closeCreateMenu();
   if (_docMod()?.hasDirtyWorkspaceFiles?.() && !confirm('Discard unsaved file changes?')) return;
   unmountWsPanelResize();
   _disposeTerminal();

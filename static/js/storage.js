@@ -26,6 +26,8 @@ export const KEYS = {
   DENSITY: 'odysseus-density',
   WORKSPACE: 'odysseus-workspace',
   WORKSPACE_VERIFIED: 'odysseus-workspace-verified',
+  WORKSPACE_RISK_ACK: 'odysseus-workspace-risk-ack',
+  HOST_TERMINAL_BANNER_DISMISSED: 'odysseus-host-terminal-banner-dismissed',
   WORKSPACE_SESSIONS: 'odysseus-workspace-sessions',
   PLAN: 'odysseus-plan',
   IDE_LAYOUT: 'odysseus-ide-layout',

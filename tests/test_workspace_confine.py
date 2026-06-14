@@ -140,6 +140,33 @@ def test_docker_rejects_unmapped_host_workspace(monkeypatch):
     assert "container" in ei.value.detail.lower()
 
 
+def test_workspace_mkdir_api(monkeypatch, tmp_path):
+    """POST /api/workspace/mkdir creates directories within the workspace."""
+    from fastapi import HTTPException
+    import routes.workspace_routes as wr
+
+    ws = tmp_path / "project"
+    ws.mkdir()
+
+    monkeypatch.setattr(wr, "get_current_user", lambda req: "admin")
+    monkeypatch.setattr(wr, "owner_is_admin_or_single_user", lambda owner: True)
+
+    router = wr.setup_workspace_routes()
+    mkdir_fn = next(r.endpoint for r in router.routes if r.path == "/api/workspace/mkdir")
+
+    from types import SimpleNamespace
+
+    root = str(ws)
+    body = SimpleNamespace(workspace=root, path="src/components")
+    out = mkdir_fn(request=object(), body=body)
+    assert out["path"] == "src/components"
+    assert (ws / "src" / "components").is_dir()
+
+    with pytest.raises(HTTPException) as ei:
+        mkdir_fn(request=object(), body=body)
+    assert ei.value.status_code == 409
+
+
 def test_workspace_delete_file_api(monkeypatch, tmp_path):
     """DELETE /api/workspace/file removes files and folders within the workspace."""
     from fastapi import HTTPException

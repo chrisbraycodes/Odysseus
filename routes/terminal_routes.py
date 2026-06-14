@@ -1,4 +1,4 @@
-"""Workspace terminal — bidirectional WebSocket PTY."""
+"""Workspace terminal — bidirectional WebSocket PTY (container or Windows host proxy)."""
 
 from __future__ import annotations
 
@@ -9,7 +9,10 @@ import os
 import uuid
 from typing import Optional
 
+import websockets
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Query
+from src.host_agent_client import host_agent_ready, host_terminal_ws_connect_url
+from src.host_terminal_consent import host_terminal_shell, normalize_host_shell
 from src.terminal_manager import (
     pty_available,
     pty_unavailable_reason,
@@ -36,6 +39,84 @@ def _authenticate_ws(websocket: WebSocket, auth_manager=None) -> Optional[str]:
     return ""
 
 
+async def _proxy_host_terminal(
+    websocket: WebSocket,
+    *,
+    workspace: str,
+    session_id: str,
+    cols: int,
+    rows: int,
+    shell: str = "",
+) -> None:
+    upstream_url = host_terminal_ws_connect_url(
+        workspace=workspace,
+        cols=cols,
+        rows=rows,
+        session=session_id,
+        shell=shell,
+    )
+    await websocket.accept()
+    await websocket.send_text(
+        json.dumps(
+            {
+                "type": "status",
+                "phase": "starting",
+                "message": "Connecting to Windows host…",
+                "session": session_id,
+            }
+        )
+    )
+    try:
+        async with websockets.connect(
+            upstream_url,
+            max_size=8 * 1024 * 1024,
+            ping_interval=20,
+            ping_timeout=20,
+        ) as upstream:
+            async def upstream_to_browser() -> None:
+                async for message in upstream:
+                    if isinstance(message, bytes):
+                        await websocket.send_bytes(message)
+                    else:
+                        await websocket.send_text(message)
+
+            async def browser_to_upstream() -> None:
+                while True:
+                    message = await websocket.receive()
+                    if message.get("type") == "websocket.disconnect":
+                        break
+                    if message.get("bytes") is not None:
+                        await upstream.send(message["bytes"])
+                        continue
+                    text = message.get("text")
+                    if text is None:
+                        continue
+                    await upstream.send(text)
+
+            await asyncio.gather(upstream_to_browser(), browser_to_upstream())
+    except WebSocketDisconnect:
+        logger.info("Host terminal proxy disconnected session=%s", session_id)
+    except Exception as exc:
+        logger.warning(
+            "Host terminal proxy error (workspace=%s): %s",
+            workspace,
+            exc,
+            exc_info=True,
+        )
+        try:
+            await websocket.send_text(
+                json.dumps(
+                    {
+                        "type": "status",
+                        "phase": "error",
+                        "message": str(exc),
+                    }
+                )
+            )
+        except Exception:
+            pass
+
+
 def setup_terminal_routes() -> APIRouter:
     router = APIRouter(tags=["terminal"])
 
@@ -46,6 +127,8 @@ def setup_terminal_routes() -> APIRouter:
         session: str = Query(""),
         cols: int = Query(80, ge=2, le=500),
         rows: int = Query(24, ge=2, le=200),
+        host: int = Query(0, ge=0, le=1),
+        shell: str = Query(""),
     ):
         auth_manager = getattr(websocket.app.state, "auth_manager", None)
         user = _authenticate_ws(websocket, auth_manager)
@@ -55,9 +138,6 @@ def setup_terminal_routes() -> APIRouter:
         if not owner_is_admin_or_single_user(user):
             await websocket.close(code=4403, reason="Admin only")
             return
-        if not pty_available():
-            await websocket.close(code=4503, reason=pty_unavailable_reason()[:120])
-            return
 
         try:
             cwd = _resolve_terminal_cwd(workspace)
@@ -66,6 +146,30 @@ def setup_terminal_routes() -> APIRouter:
             return
 
         session_id = (session or "").strip() or str(uuid.uuid4())
+        host_shell = normalize_host_shell(shell or host_terminal_shell())
+
+        if host and host_agent_ready(cwd):
+            await _proxy_host_terminal(
+                websocket,
+                workspace=cwd,
+                session_id=session_id,
+                cols=cols,
+                rows=rows,
+                shell=host_shell,
+            )
+            return
+
+        if host and not host_agent_ready(cwd):
+            await websocket.close(
+                code=4503,
+                reason="Enable the Windows host terminal in chat before connecting",
+            )
+            return
+
+        if not pty_available():
+            await websocket.close(code=4503, reason=pty_unavailable_reason()[:120])
+            return
+
         await websocket.accept()
 
         term: Optional[object] = None

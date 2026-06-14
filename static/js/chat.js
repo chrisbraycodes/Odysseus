@@ -3223,6 +3223,44 @@ import { createStreamRenderer } from './streamingRenderer.js';
     }
   }
 
+  /**
+   * Stop all in-flight work for a specific session (foreground, background, or research).
+   * Used when closing a chat tab — always stops the server run.
+   */
+  export function abortSessionStream(sessionId, stopServer = true) {
+    if (!sessionId) return;
+
+    const isForeground = isStreaming && (
+      _streamSessionId === sessionId ||
+      sessionModule.getCurrentSessionId() === sessionId
+    );
+
+    if (_researchingStreamIds.has(sessionId)) {
+      fetch(`${API_BASE}/api/research/cancel/${sessionId}`, { method: 'POST', credentials: 'same-origin' }).catch(() => {});
+      _researchingStreamIds.delete(sessionId);
+    }
+
+    if (isForeground && currentAbort) {
+      abortCurrentRequest(stopServer);
+    }
+
+    const bg = _backgroundStreams.get(sessionId);
+    if (bg) {
+      if (bg.abortCtrl) {
+        try { bg.abortCtrl.abort(); } catch (_) {}
+      }
+      _backgroundStreams.delete(sessionId);
+      if (stopServer) {
+        fetch(`${API_BASE}/api/chat/stop/${encodeURIComponent(sessionId)}`, { method: 'POST', credentials: 'same-origin' }).catch(() => {});
+      }
+    }
+
+    _resumingStreams.delete(sessionId);
+
+    if (sessionModule.clearStreaming) sessionModule.clearStreaming(sessionId);
+    if (sessionModule.clearResearching) sessionModule.clearResearching(sessionId);
+  }
+
   // ── Stall watchdog ──────────────────────────────────────────────
   // Auto-recover a turn whose stream died (connection drop) or went silent:
   // preserve the partial, then re-submit a completion handshake by reusing the
@@ -5042,6 +5080,7 @@ import { createStreamRenderer } from './streamingRenderer.js';
     displayMetrics: chatRenderer.displayMetrics,
     handleChatSubmit,
     abortCurrentRequest,
+    abortSessionStream,
     detachCurrentStream,
     checkBackgroundStream,
     resumeStream,

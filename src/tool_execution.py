@@ -341,6 +341,16 @@ def _resolve_tool_path_in_workspace(workspace: str, raw_path: str) -> str:
     if raw_path is None or not str(raw_path).strip():
         raise ValueError("path is required")
     base = os.path.realpath(workspace)
+    try:
+        from src.host_terminal_consent import host_terminal_unrestricted
+        from src.workspace_path import docker_workspace_available, path_under_workspace_root
+
+        if host_terminal_unrestricted() and docker_workspace_available():
+            mount_root = os.path.realpath("/workspace")
+            if path_under_workspace_root(mount_root, base):
+                base = mount_root
+    except Exception:
+        pass
     expanded = os.path.expanduser(str(raw_path).strip())
     candidate = expanded if os.path.isabs(expanded) else os.path.join(base, expanded)
     resolved = os.path.realpath(candidate)
@@ -724,7 +734,7 @@ def _prepare_bash_command(content: str, workspace: Optional[str]) -> str:
 
     cmd, _preview, run_on_host = prepare_node_workspace_command(cmd, workspace)
     if run_on_host:
-        return f"#@host-dev@#\n{cmd}"
+        return f"#@host-exec@#\n{cmd}"
     # Long installs / dev servers block the browser stream — run detached so the
     # agent can finish the turn and resume when output is ready.
     if not is_bg and (
@@ -784,8 +794,36 @@ async def _direct_fallback(
             from src.workspace_dev import host_dev_server_message
             from src.workspace_file_orchestration import is_bash_file_creation_attempt
 
-            if content.startswith("#@host-dev@#"):
+            if content.startswith("#@host-exec@#") or content.startswith("#@host-dev@#"):
                 host_cmd = content.split("\n", 1)[-1].strip()
+                from src.workspace_dev import (
+                    host_dev_server_message,
+                    is_dev_server_command,
+                    preview_note,
+                    prepare_node_workspace_command,
+                )
+
+                _, preview_url, run_on_host = prepare_node_workspace_command(host_cmd, workspace)
+                if run_on_host and workspace:
+                    from src.host_agent_client import host_agent_exec
+
+                    is_bg = content.startswith("#!bg\n") or is_dev_server_command(host_cmd)
+                    result = await host_agent_exec(
+                        workspace=workspace,
+                        command=host_cmd,
+                        cwd=workspace,
+                        background=is_bg,
+                    )
+                    if result.get("error"):
+                        return {"error": result["error"], "exit_code": result.get("exit_code", 1)}
+                    note = preview_note(
+                        preview_url,
+                        run_on_host=False,
+                        workspace=workspace,
+                        cmd=host_cmd,
+                    )
+                    output = (result.get("output") or "(no output)") + note
+                    return {"output": output, "exit_code": result.get("exit_code", 0)}
                 return {
                     "output": host_dev_server_message(workspace, host_cmd),
                     "exit_code": 0,
@@ -1354,6 +1392,15 @@ async def execute_tool_block(
         return desc, result
 
     if tool == "bash":
+        from src.workspace_dev import validate_node_workspace_command
+
+        _is_bg_raw, _raw_cmd = _split_bg_marker(content)
+        validation_err = validate_node_workspace_command(_raw_cmd or content, workspace)
+        if validation_err:
+            return f"bash: rejected", {
+                "error": validation_err,
+                "exit_code": 1,
+            }
         content = _prepare_bash_command(content, workspace)
 
     # ask_user: the agent poses a multiple-choice question to the user to get a
@@ -1452,9 +1499,21 @@ async def execute_tool_block(
         _is_bg, _bg_cmd = _split_bg_marker(content)
         if _is_bg and _bg_cmd:
             from src import bg_jobs
-            from src.workspace_dev import dev_server_preview_url, preview_note
+            from src.workspace_dev import dev_server_preview_url, preview_note, validate_node_workspace_command
+
+            validation_err = validate_node_workspace_command(_bg_cmd, workspace or _default_agent_cwd())
+            if validation_err:
+                return "bash: rejected", {
+                    "error": validation_err,
+                    "exit_code": 1,
+                }
 
             rec = bg_jobs.launch(_bg_cmd, session_id=session_id, cwd=workspace or _default_agent_cwd())
+            if rec.get("blocked"):
+                return "bash: blocked", {
+                    "error": rec.get("block_reason") or "Identical command failed recently; fix root cause before retrying.",
+                    "exit_code": 1,
+                }
             short = _bg_cmd.strip().split(chr(10))[0][:80]
             desc = f"bash (background): {short}"
             preview = dev_server_preview_url(_bg_cmd)

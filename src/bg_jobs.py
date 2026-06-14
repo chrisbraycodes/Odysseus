@@ -51,6 +51,9 @@ _MAX_OUTPUT_CHARS = 16000
 # files) is kept before pruning, so neither the store nor data/bg_jobs/ grows
 # without bound. The agent has already consumed the result by then.
 _RETENTION_S = 3600  # 1 hour after follow-up
+# Don't relaunch the same command in the same cwd shortly after it failed —
+# weak models + bg follow-ups otherwise spin forever.
+_FAIL_COOLDOWN_S = 300  # 5 minutes
 
 
 def _load() -> Dict[str, Dict[str, Any]]:
@@ -90,15 +93,34 @@ def launch(command: str, session_id: str, cwd: Optional[str] = None,
     if not command:
         raise ValueError("bg_jobs.launch: empty command")
 
-    # Don't stack identical running jobs in one session (weak models retry in a loop).
     jobs = _load()
+    norm_cwd = cwd or None
+    # Don't stack identical running jobs (any session) — weak models retry in loops.
     for rec in jobs.values():
-        if (
-            rec.get("session_id") == session_id
-            and rec.get("status") == "running"
-            and (rec.get("command") or "").strip() == command
-        ):
-            return rec
+        if rec.get("status") != "running":
+            continue
+        if (rec.get("command") or "").strip() != command:
+            continue
+        if (rec.get("cwd") or None) != norm_cwd:
+            continue
+        return rec
+    now = time.time()
+    for rec in jobs.values():
+        if rec.get("status") != "failed":
+            continue
+        if (rec.get("command") or "").strip() != command:
+            continue
+        if (rec.get("cwd") or None) != norm_cwd:
+            continue
+        ended = rec.get("ended_at") or 0
+        if ended and (now - ended) < _FAIL_COOLDOWN_S:
+            blocked = dict(rec)
+            blocked["blocked"] = True
+            blocked["block_reason"] = (
+                f"Identical command failed recently (job {rec.get('id')}); "
+                f"wait {_FAIL_COOLDOWN_S}s or fix the root cause before retrying."
+            )
+            return blocked
 
     job_id = uuid.uuid4().hex[:12]
     log_path = (_JOBS_DIR / f"{job_id}.log").resolve()
@@ -220,8 +242,9 @@ def refresh() -> Dict[str, Dict[str, Any]]:
     for rec in jobs.values():
         if rec.get("status") != "running":
             continue
-        exit_path = Path(rec.get("exit_path", ""))
-        if exit_path.exists():
+        exit_raw = (rec.get("exit_path") or "").strip()
+        exit_path = Path(exit_raw) if exit_raw else None
+        if exit_path and exit_path.exists():
             try:
                 code = int(exit_path.read_text(encoding="utf-8", errors="replace").strip() or "1")
             except Exception:
@@ -238,7 +261,7 @@ def refresh() -> Dict[str, Dict[str, Any]]:
             rec["ended_at"] = now
             rec["timed_out"] = True
             changed = True
-        elif not _pid_alive(rec.get("pid")) and not exit_path.exists():
+        elif exit_path is None and not _pid_alive(rec.get("pid")):
             # Process vanished without writing an exit code (killed, OOM,
             # crash). Don't leave it "running" forever.
             rec["status"] = "failed"
@@ -256,6 +279,39 @@ def refresh() -> Dict[str, Dict[str, Any]]:
 def _kill(pid: Optional[int]) -> None:
     # Cross-platform process-tree teardown (POSIX killpg / Windows taskkill /T).
     kill_process_tree(pid)
+
+
+def cancel_running(
+    *,
+    session_id: Optional[str] = None,
+    command: Optional[str] = None,
+    cwd: Optional[str] = None,
+    mark_followed_up: bool = True,
+) -> List[str]:
+    """Kill matching running jobs. Returns cancelled job ids."""
+    jobs = refresh()
+    cancelled: List[str] = []
+    now = time.time()
+    for jid, rec in jobs.items():
+        if rec.get("status") != "running":
+            continue
+        if session_id and rec.get("session_id") != session_id:
+            continue
+        if command and (rec.get("command") or "").strip() != command.strip():
+            continue
+        if cwd is not None and (rec.get("cwd") or None) != (cwd or None):
+            continue
+        _kill(rec.get("pid"))
+        rec["status"] = "failed"
+        rec["exit_code"] = -1
+        rec["ended_at"] = now
+        rec["cancelled"] = True
+        if mark_followed_up:
+            rec["followed_up"] = True
+        cancelled.append(jid)
+    if cancelled:
+        _save(jobs)
+    return cancelled
 
 
 def pending_followups() -> List[Dict[str, Any]]:

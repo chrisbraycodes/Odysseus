@@ -1751,6 +1751,28 @@ async def stream_agent_loop(
             workspace = resolve_effective_workspace(
                 workspace, _last_user, (approved_plan or "")
             ) or workspace
+        _host_terminal_note = ""
+        try:
+            from src.host_agent_client import host_agent_ready
+
+            if host_agent_ready(workspace):
+                _host_terminal_note = (
+                    "\nWindows host terminal is ENABLED for this workspace. "
+                    "npm/npx/yarn/pnpm/node/vite commands run automatically on the user's "
+                    "Windows computer (not inside Docker). The integrated terminal is a real "
+                    "Windows shell. Dev previews bind to http://127.0.0.1:3000 or :5173 on the host. "
+                    "Run ```bash\\nnpm install\\n``` and ```bash\\nnpm start\\n``` directly — "
+                    "do NOT tell the user to open an external terminal."
+                )
+            elif os.environ.get("WORKSPACE_DEV_EXEC", "host").strip().lower() == "host" and os.path.isdir("/workspace"):
+                _host_terminal_note = (
+                    "\nDev preview: run ```bash\\nnpm start\\n``` (or `npm run dev` / `vite`). "
+                    "If the Windows host terminal is not enabled yet, Odysseus returns host run "
+                    "instructions — tell the user to enable it from the chat banner "
+                    "(Enable Windows host terminal)."
+                )
+        except Exception:
+            pass
         _ws_note = (
             f"## ACTIVE WORKSPACE — READ FIRST\n"
             f"The user is working in this folder: {workspace}\n"
@@ -1759,7 +1781,7 @@ async def stream_agent_loop(
             f"`npx create-react-app my-app`). If you must reference the absolute path "
             f"in a shell command, quote it (paths may contain spaces).\n"
             f"read_file/write_file/edit_file/delete_file are confined to this folder (paths outside "
-            f"are rejected).\n"
+            f"are rejected unless the user enabled unrestricted host access).\n"
             f"When the user says \"the code\" / \"this project\" / \"the workspace\" "
             f"or asks to review/find/edit something WITHOUT a path, they mean THIS "
             f"folder. Do NOT ask the user for code or a path, and do NOT read a file "
@@ -1774,11 +1796,8 @@ async def stream_agent_loop(
             f"destination after files arrive.\n"
             f"Scaffold requests (React app, npm project, etc.): run "
             f"```bash\\nnpx create-react-app <name>\\n``` immediately — cwd is "
-            f"already here. No `cd`, no `sudo`, no tutorial steps.\n"
-            f"Dev preview: run ```bash\\nnpm start\\n``` (or `npm run dev` / `vite`) — "
-            f"with Docker + bind mount, dev servers run on your computer at the "
-            f"host workspace folder (WORKSPACE_DEV_EXEC=host). Odysseus returns "
-            f"the preview URL and host run instructions. User opens it in a new browser tab."
+            f"already here. No `cd`, no `sudo`, no tutorial steps."
+            f"{_host_terminal_note}"
         )
         if cwd_system_note:
             _cwd = cwd_system_note(workspace)
