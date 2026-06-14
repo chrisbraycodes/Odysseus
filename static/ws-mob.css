@@ -2,9 +2,9 @@
 
    Mobile panel layout  (wsMobilePanels.js + ideLayoutMode.js)
 
-   Active when user selects mobile layout: body.ws-mob-view
+   Active when viewport is narrow (<=768px): body.ws-mob-view
 
-   1 or 2 panels visible at once, side by side, with a drag handle.
+   Bottom tab bar + up to 2 panels side by side with a drag handle.
 
    ═══════════════════════════════════════════════════════════════════ */
 
@@ -23,6 +23,16 @@ body.ws-mob-view {
   overflow: hidden !important;
 
   padding: 0 !important;
+
+}
+
+body.ws-mob-view > .icon-rail,
+
+body.ws-mob-view > #mobile-backdrop,
+
+body.ws-mob-view > #mobile-menu-btn {
+
+  display: none !important;
 
 }
 
@@ -122,8 +132,6 @@ body.ws-mob-view #chat-container,
 
 body.ws-mob-view #ws-explorer-pane,
 
-body.ws-mob-view #ws-workbench-column,
-
 body.ws-mob-view #doc-editor-pane,
 
 body.ws-mob-view #ws-mob-terminal-panel {
@@ -135,6 +143,16 @@ body.ws-mob-view #ws-mob-terminal-panel {
   min-height: 0 !important;
 
   overflow: hidden !important;
+
+}
+
+/* Desktop workbench + doc divider must not sit in the mobile flex row. */
+
+body.ws-mob-view #ws-workbench-column,
+
+body.ws-mob-view #doc-divider {
+
+  display: none !important;
 
 }
 
@@ -268,23 +286,11 @@ body.ws-mob-view.ws-explorer-view .ws-terminal-dock {
 
 
 
-/* Layout mode toggle (chat top bar) — desktop only; mobile uses bottom tab bar */
+/* Layout mode toggle hidden — layout follows viewport width automatically */
 
-body.ws-mob-view #ide-layout-toggle,
-
-body.ide-layout-mobile #ide-layout-toggle {
+#ide-layout-toggle {
 
   display: none !important;
-
-}
-
-@media (max-width: 768px) {
-
-  #ide-layout-toggle {
-
-    display: none !important;
-
-  }
 
 }
 
@@ -375,6 +381,16 @@ body.ide-layout-mobile #ide-layout-toggle {
    Standalone terminal panel
 
    ═══════════════════════════════════════════════════════════════════ */
+
+
+
+/* Standalone terminal panel (mobile tab only) */
+
+body:not(.ws-mob-view) #ws-mob-terminal-panel {
+
+  display: none !important;
+
+}
 
 
 
@@ -558,13 +574,25 @@ body.ide-layout-mobile #ide-layout-toggle {
 
   border-top: 1px solid color-mix(in srgb, var(--fg, #fff) 10%, transparent);
 
-  display: flex;
+  display: flex !important;
 
   align-items: stretch;
 
-  z-index: 950;
+  visibility: visible !important;
+
+  z-index: 10050;
+
+  pointer-events: auto;
 
   padding-bottom: env(safe-area-inset-bottom, 0px);
+
+}
+
+body.ide-layout-mobile #ws-mob-tabbar,
+
+body.ws-mob-view #ws-mob-tabbar {
+
+  display: flex !important;
 
 }
 
@@ -661,6 +689,66 @@ body.ide-layout-mobile #ide-layout-toggle {
   letter-spacing: 0.02em;
 
   white-space: nowrap;
+
+}
+
+
+
+/* Empty-state overlays when a panel is selected but has nothing to show yet */
+
+body.ws-mob-view .ws-mob-panel-empty {
+
+  flex-shrink: 0 !important;
+
+  min-width: 0 !important;
+
+  overflow: hidden !important;
+
+  align-items: center;
+
+  justify-content: center;
+
+  background: var(--bg, #111);
+
+  border-right: 1px solid color-mix(in srgb, var(--fg, #fff) 8%, transparent);
+
+  pointer-events: none;
+
+  z-index: 5;
+
+}
+
+body.ws-mob-view .ws-mob-panel-empty-inner {
+
+  max-width: 220px;
+
+  padding: 16px 14px;
+
+  text-align: center;
+
+  opacity: 0.62;
+
+}
+
+body.ws-mob-view .ws-mob-panel-empty-title {
+
+  font-size: 12px;
+
+  font-weight: 600;
+
+  margin-bottom: 6px;
+
+  color: var(--fg, #fff);
+
+}
+
+body.ws-mob-view .ws-mob-panel-empty-hint {
+
+  font-size: 11px;
+
+  line-height: 1.45;
+
+  color: color-mix(in srgb, var(--fg, #fff) 78%, transparent);
 
 }
 

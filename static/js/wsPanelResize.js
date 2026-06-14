@@ -132,16 +132,26 @@ function _ensureHandle(id, orientation) {
   return el;
 }
 
+function _compactDesktop() {
+  return window.innerWidth > 768 && window.innerWidth <= 1100;
+}
+
+function _minFiles() { return _compactDesktop() ? 160 : MIN_FILES; }
+function _minChat() { return _compactDesktop() ? 220 : MIN_CHAT; }
+function _minWorkbench() { return _compactDesktop() ? 180 : MIN_WORKBENCH; }
+
 function _clampFiles(w) {
   const rowW = _ideRowWidth();
-  const max = Math.max(MIN_FILES, rowW - MIN_CHAT - MIN_WORKBENCH - SPLIT_W * 2);
-  return Math.round(Math.max(MIN_FILES, Math.min(max, w)));
+  const minF = _minFiles();
+  const max = Math.max(minF, rowW - _minChat() - _minWorkbench() - SPLIT_W * 2);
+  return Math.round(Math.max(minF, Math.min(max, w)));
 }
 
 function _clampChat(w) {
   const rowW = _ideRowWidth();
-  const max = Math.max(MIN_CHAT, rowW - MIN_FILES - MIN_WORKBENCH - SPLIT_W * 2);
-  return Math.round(Math.max(MIN_CHAT, Math.min(max, w)));
+  const minC = _minChat();
+  const max = Math.max(minC, rowW - _minFiles() - _minWorkbench() - SPLIT_W * 2);
+  return Math.round(Math.max(minC, Math.min(max, w)));
 }
 
 function _clampTerminal(h) {

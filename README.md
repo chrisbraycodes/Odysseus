@@ -1,18 +1,8 @@
-# Odysseus
-
-```
-───────────────────────────────────────────────
- ⊹ ࣪ ˖ ૮( ˶ᵔ ᵕ ᵔ˶ )っ  Odysseus vers. 1.0
-───────────────────────────────────────────────
-```
-
-![Prometheus Source — Odysseus workspace IDE with file tree, editor, terminal, and local LLM chat](docs/images/prometheus-source-preview.png)
-
-A self-hosted AI workspace -- meant to be the self-hosted version of the UI experience you get from ChatGPT and Claude. But with more jank and fun. Running on your own hardware, with your own data -- local-first, privacy-first, and no trojan.
+# Prometheus Source — Odysseus workspace IDE with file tree, editor, terminal, and local LLM chat
 
 ## Prometheus Source
 
-This repository is based on upstream [Odysseus](https://github.com/pewdiepie-archdaemon/odysseus). The components below are **Prometheus Source** — original work by **Christopher Bray** (YARB Industries LLC) — integrated into this deployment:
+This repository is based on upstream Odysseus. The components below are Prometheus Source — original work by Christopher Bray (YARB Industries LLC) — integrated into this deployment:
 
 | Area | What it is | Key paths |
 |------|------------|-----------|
@@ -23,6 +13,16 @@ This repository is based on upstream [Odysseus](https://github.com/pewdiepie-arc
 | **Docker overrides** | Configurable `/workspace` mount, dev-preview port mapping (`WORKSPACE_HOST_PATH` in `.env`) | `docker-compose.yml`, `.env.example` |
 
 Everything else — chat, agent loop, Cookbook, Deep Research, email, calendar, memory, and the core Odysseus UI — comes from upstream Odysseus unless noted above.
+
+![Prometheus Source — Odysseus workspace IDE with file tree, editor, terminal, and local LLM chat](docs/images/prometheus-source-preview.png)
+
+```
+───────────────────────────────────────────────
+ ⊹ ࣪ ˖ ૮( ˶ᵔ ᵕ ᵔ˶ )っ  Odysseus vers. 1.0
+───────────────────────────────────────────────
+```
+
+A self-hosted AI workspace -- meant to be the self-hosted version of the UI experience you get from ChatGPT and Claude. But with more jank and fun. Running on your own hardware, with your own data -- local-first, privacy-first, and no trojan.
 
 ## AI agent setup (from source)
 

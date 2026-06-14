@@ -756,7 +756,7 @@ function _watchIdeLayoutMode() {
     if (now === _lastMobileLayout) return;
     _lastMobileLayout = now;
     _onIdeLayoutModeChange();
-    if (!now) ensureIdeLayoutOpen().catch(() => {});
+    restoreWorkspaceIde().catch(() => {});
   });
 }
 
