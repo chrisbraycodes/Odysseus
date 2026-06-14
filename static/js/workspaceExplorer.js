@@ -439,6 +439,7 @@ function _ensureMobileTerminalPanel() {
   panel.innerHTML = `
     <div class="ws-terminal-dock-header">
       <div class="ws-terminal-dock-title-row">
+        <div class="ws-mob-hamburger-slot" aria-hidden="true"></div>
         <span class="ws-terminal-dock-title">Terminal</span>
         <span class="prometheus-source-label">PROMETHEUS SOURCE</span>
       </div>

@@ -54,6 +54,8 @@ body.ws-mob-view .hamburger-btn {
 
   display: flex !important;
 
+  position: fixed;
+
   top: 6px;
 
   left: 8px !important;
@@ -67,6 +69,36 @@ body.ws-mob-view .hamburger-btn {
   width: 44px;
 
   height: 44px;
+
+}
+
+body.ws-mob-view .ws-mob-hamburger-slot .hamburger-btn {
+
+  position: static !important;
+
+  top: auto !important;
+
+  left: auto !important;
+
+  right: auto !important;
+
+  z-index: auto;
+
+  flex-shrink: 0;
+
+  width: 40px;
+
+  height: 40px;
+
+  min-width: 40px;
+
+  margin: 0;
+
+}
+
+body.ws-mob-view.ws-mob-hamburger-in-terminal .chat-top-bar {
+
+  padding-left: 6px !important;
 
 }
 
@@ -236,7 +268,25 @@ body.ws-mob-view.ws-explorer-view .ws-terminal-dock {
 
 
 
-/* Layout mode toggle (chat top bar) */
+/* Layout mode toggle (chat top bar) — desktop only; mobile uses bottom tab bar */
+
+body.ws-mob-view #ide-layout-toggle,
+
+body.ide-layout-mobile #ide-layout-toggle {
+
+  display: none !important;
+
+}
+
+@media (max-width: 768px) {
+
+  #ide-layout-toggle {
+
+    display: none !important;
+
+  }
+
+}
 
 .chat-top-bar {
 
@@ -337,6 +387,58 @@ body.ws-mob-view.ws-explorer-view .ws-terminal-dock {
   background: var(--bg, #111);
 
   overflow: hidden;
+
+}
+
+.ws-mob-terminal-panel .ws-terminal-dock-header {
+
+  flex-shrink: 0;
+
+  display: flex;
+
+  align-items: center;
+
+  min-height: 44px;
+
+  padding: 0 10px 0 2px;
+
+  border-bottom: 1px solid color-mix(in srgb, var(--fg, #fff) 10%, transparent);
+
+  background: var(--panel, var(--bg));
+
+}
+
+.ws-mob-terminal-panel .ws-terminal-dock-title-row {
+
+  flex: 1;
+
+  min-width: 0;
+
+  gap: 6px;
+
+}
+
+.ws-mob-terminal-panel .ws-terminal-dock-title {
+
+  font-size: 11px;
+
+  font-weight: 600;
+
+  letter-spacing: 0.03em;
+
+  white-space: nowrap;
+
+}
+
+.ws-mob-hamburger-slot {
+
+  display: flex;
+
+  align-items: center;
+
+  justify-content: center;
+
+  flex-shrink: 0;
 
 }
 

@@ -47,6 +47,59 @@ let _drag     = null;
 let _active   = false;
 let _wired    = false;
 let _hadTerminal = false;
+let _hamburgerHome = null;
+let _hamburgerNext = null;
+
+function _rememberHamburgerHome() {
+  const btn = document.getElementById('hamburger-btn');
+  if (!btn || _hamburgerHome) return;
+  _hamburgerHome = btn.parentNode;
+  _hamburgerNext = btn.nextSibling;
+}
+
+function _terminalHamburgerSlot() {
+  const row = document.querySelector('#ws-mob-terminal-panel .ws-terminal-dock-title-row');
+  if (!row) return null;
+  let slot = row.querySelector('.ws-mob-hamburger-slot');
+  if (!slot) {
+    slot = document.createElement('div');
+    slot.className = 'ws-mob-hamburger-slot';
+    row.insertBefore(slot, row.firstChild);
+  }
+  return slot;
+}
+
+function _syncHamburgerPlacement() {
+  if (!_active) return;
+  const btn = document.getElementById('hamburger-btn');
+  if (!btn) return;
+  _rememberHamburgerHome();
+
+  const terminalOn = _panels.includes('terminal');
+  const panel = document.getElementById('ws-mob-terminal-panel');
+  const panelVisible = panel && getComputedStyle(panel).display !== 'none';
+  const slot = terminalOn && panelVisible ? _terminalHamburgerSlot() : null;
+
+  if (slot) {
+    if (btn.parentNode !== slot) slot.appendChild(btn);
+    document.body.classList.add('ws-mob-hamburger-in-terminal');
+  } else if (_hamburgerHome) {
+    if (btn.parentNode !== _hamburgerHome) {
+      _hamburgerHome.insertBefore(btn, _hamburgerNext);
+    }
+    document.body.classList.remove('ws-mob-hamburger-in-terminal');
+  }
+}
+
+function _restoreHamburgerHome() {
+  const btn = document.getElementById('hamburger-btn');
+  if (!btn || !_hamburgerHome || btn.parentNode === _hamburgerHome) {
+    document.body.classList.remove('ws-mob-hamburger-in-terminal');
+    return;
+  }
+  _hamburgerHome.insertBefore(btn, _hamburgerNext);
+  document.body.classList.remove('ws-mob-hamburger-in-terminal');
+}
 
 function _save() {
   try { localStorage.setItem(LS_KEY, JSON.stringify({ panels: _panels, splitPct: _splitPct })); } catch (_) {}
@@ -146,6 +199,8 @@ function _apply() {
   }
   _hadTerminal = hasTerminal;
 
+  _syncHamburgerPlacement();
+
   requestAnimationFrame(() => { try { window.dispatchEvent(new Event('resize')); } catch (_) {} });
 }
 
@@ -243,6 +298,7 @@ function _cleanup() {
   if (!_active) return;
   _active = false;
   _hadTerminal = false;
+  _restoreHamburgerHome();
   document.body.classList.remove('ws-mob-view');
   document.body.style.removeProperty('height');
   TABS.forEach(({ getEl }) => {
