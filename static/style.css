@@ -36781,6 +36781,134 @@ body.ide-layout-desktop.ws-explorer-view:not(.ws-mob-view) .ws-workbench-column 
   flex: 1 1 0 !important;
   min-height: 120px !important;
 }
+
+/* Desktop IDE: draggable 4-zone grid (wsPanelLayout.js) */
+body.ws-ide-grid-layout.ws-explorer-view #ws-ide-desktop-grid {
+  display: grid;
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+  overflow: hidden;
+  grid-template-columns: var(--ws-files-width, 340px) 6px minmax(0, 1fr) 6px var(--ws-chat-width, 380px);
+  grid-template-rows: minmax(0, 1fr) 6px var(--ws-terminal-height, 280px);
+  grid-template-areas:
+    "ws-zone-left ws-zone-split-v ws-zone-centerTop ws-zone-split-v2 ws-zone-right"
+    "ws-zone-left ws-zone-split-v ws-zone-split-h ws-zone-split-v2 ws-zone-right"
+    "ws-zone-left ws-zone-split-v ws-zone-centerBottom ws-zone-split-v2 ws-zone-right";
+}
+body.ws-ide-grid-layout.ws-explorer-view #ws-ide-desktop-grid > #ws-explorer-pane,
+body.ws-ide-grid-layout.ws-explorer-view #ws-ide-desktop-grid > #doc-editor-pane,
+body.ws-ide-grid-layout.ws-explorer-view #ws-ide-desktop-grid > #ws-terminal-dock,
+body.ws-ide-grid-layout.ws-explorer-view #ws-ide-desktop-grid > #chat-container {
+  height: 100%;
+  min-height: 0;
+  width: auto !important;
+  max-width: none !important;
+  flex: unset !important;
+}
+body.ws-ide-grid-layout.ws-explorer-view #ws-ide-desktop-grid > #ws-explorer-pane {
+  display: grid !important;
+}
+body.ws-ide-grid-layout.ws-explorer-view #ws-ide-desktop-grid > #doc-editor-pane,
+body.ws-ide-grid-layout.ws-explorer-view #ws-ide-desktop-grid > #ws-terminal-dock,
+body.ws-ide-grid-layout.ws-explorer-view #ws-ide-desktop-grid > #chat-container {
+  display: flex !important;
+}
+body.ws-ide-grid-layout.ws-explorer-view #ws-ide-desktop-grid > .ws-ide-split-v {
+  grid-area: ws-zone-split-v;
+}
+body.ws-ide-grid-layout.ws-explorer-view #ws-ide-desktop-grid > #ws-split-files,
+body.ws-ide-grid-layout.ws-explorer-view #ws-ide-desktop-grid > #ws-split-chat {
+  align-self: stretch;
+  height: 100%;
+  min-height: 0;
+  z-index: 14;
+}
+body.ws-ide-grid-layout.ws-explorer-view #ws-ide-desktop-grid > #ws-split-chat {
+  grid-area: ws-zone-split-v2;
+}
+body.ws-ide-grid-layout.ws-explorer-view #ws-ide-desktop-grid > #ws-split-terminal {
+  grid-area: ws-zone-split-h;
+  align-self: start;
+  width: 100%;
+  z-index: 14;
+}
+body.ws-ide-grid-layout.ws-explorer-view #ws-workbench-column,
+body.ws-ide-grid-layout.ws-explorer-view #ws-ide-desktop-grid > #ws-workbench-column {
+  display: none !important;
+}
+.ws-panel-layout-grip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  margin-right: 6px;
+  padding: 0;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--fg);
+  opacity: 0.45;
+  cursor: grab;
+  flex-shrink: 0;
+  vertical-align: middle;
+}
+.ws-panel-layout-grip:hover {
+  opacity: 0.9;
+  background: color-mix(in srgb, var(--fg) 10%, transparent);
+}
+body.ws-panel-layout-dragging,
+body.ws-panel-layout-dragging .ws-panel-layout-grip {
+  cursor: grabbing;
+}
+.ws-panel-layout-overlay {
+  position: fixed;
+  z-index: 2000;
+  left: var(--grid-left, 0);
+  top: var(--grid-top, 0);
+  width: var(--grid-width, 100%);
+  height: var(--grid-height, 100%);
+  display: grid;
+  grid-template-columns: var(--slot-files-w, 340px) var(--slot-center-w, 1fr) var(--slot-chat-w, 380px);
+  grid-template-rows: var(--slot-top-h, 1fr) var(--slot-term-h, 280px);
+  pointer-events: none;
+  padding: 0;
+  gap: 6px;
+}
+.ws-panel-layout-overlay[hidden] {
+  display: none !important;
+}
+.ws-panel-layout-slot {
+  pointer-events: auto;
+  border: 2px dashed transparent;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: color-mix(in srgb, var(--accent, var(--red)) 0%, transparent);
+  transition: background 0.12s, border-color 0.12s;
+}
+.ws-panel-layout-slot[data-zone="left"] { grid-column: 1; grid-row: 1 / 3; }
+.ws-panel-layout-slot[data-zone="centerTop"] { grid-column: 2; grid-row: 1; }
+.ws-panel-layout-slot[data-zone="centerBottom"] { grid-column: 2; grid-row: 2; }
+.ws-panel-layout-slot[data-zone="right"] { grid-column: 3; grid-row: 1 / 3; }
+.ws-panel-layout-slot-hover,
+.ws-panel-layout-slot:hover {
+  border-color: var(--accent, var(--red));
+  background: color-mix(in srgb, var(--accent, var(--red)) 14%, transparent);
+}
+.ws-panel-layout-slot-source {
+  opacity: 0.35;
+}
+.ws-panel-layout-slot-label {
+  font-size: 12px;
+  font-weight: 600;
+  opacity: 0.85;
+  padding: 8px;
+  text-align: center;
+}
 }
 .ws-explorer-header {
   display: flex;
@@ -37212,3 +37340,18 @@ body.ws-explorer-view .ws-explorer-tree-section {
 .ws-terminal-idle-title { font-size: 12px; font-weight: 600; margin-bottom: 4px; }
 .ws-terminal-idle-hint { font-size: 11px; line-height: 1.4; max-width: 280px; }
 .ws-terminal-idle .ws-terminal-pick-btn { margin-top: 10px; }
+
+/* Panel drag grips: header rows stay flex so grabbers align */
+.ws-explorer-header .ws-explorer-title-row,
+.doc-tab-bar,
+.chat-top-bar {
+  display: flex;
+  align-items: center;
+}
+.chat-meta-overlay .ws-panel-layout-grip {
+  display: none;
+  margin-right: 4px;
+}
+body.ws-ide-grid-layout.ws-explorer-view .chat-meta-overlay .ws-panel-layout-grip {
+  display: inline-flex;
+}

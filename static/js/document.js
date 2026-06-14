@@ -28,6 +28,7 @@ import { refreshWsPanelResize } from './wsPanelResize.js';
   let _autoSaveDebounce = null;
   let _animationInProgress = false;
   let _animationCancel = null;      // function to cancel current animation
+  let _loadingSpinner = null;
   let _htmlPreviewActive = false;   // true when inline HTML preview iframe is showing
   let _emailAccountsCache = null;
   let _emailAccountsCacheAt = 0;
@@ -57,7 +58,7 @@ import { refreshWsPanelResize } from './wsPanelResize.js';
   /** Map the type-picker value to a highlight.js grammar name (or null). */
   function _resolveHljsLanguage(lang) {
     const l = (lang || '').toLowerCase();
-    if (!l || l === 'email' || l === 'pdf') return null;
+    if (!l || l === 'email' || l === 'pdf' || l === 'text') return null;
     const aliases = {
       svg: 'xml', jsx: 'javascript', tsx: 'typescript', py: 'python',
       sh: 'bash', shell: 'bash', yml: 'yaml', htm: 'html', cs: 'csharp',
@@ -169,7 +170,7 @@ import { refreshWsPanelResize } from './wsPanelResize.js';
       yaml: 'yaml', yml: 'yaml', sh: 'bash', bash: 'bash',
       sql: 'sql', rs: 'rust', go: 'go', java: 'java', c: 'c', cpp: 'cpp',
       xml: 'xml', svg: 'svg', toml: 'toml', ini: 'ini', rb: 'ruby', php: 'php',
-      csv: 'csv',
+      csv: 'csv', txt: 'text', log: 'text',
     };
     return map[ext] || '';
   }
@@ -467,11 +468,6 @@ import { refreshWsPanelResize } from './wsPanelResize.js';
     }
     _ensureDocPaneMounted();
     switchToWorkspaceFile(path);
-    if (document.body.classList.contains('ws-explorer-view')) {
-      try {
-        document.dispatchEvent(new CustomEvent('ws-adopt-editor-workbench'));
-      } catch (_) {}
-    }
   }
 
   // Project explorer opens files via event so it never depends on import order.
@@ -4348,6 +4344,7 @@ import { refreshWsPanelResize } from './wsPanelResize.js';
           <option value="ruby">ruby</option>
           <option value="php">php</option>
           <option value="csv">csv</option>
+          <option value="text">text</option>
           <option value="email">email</option>
           <option value="pdf">pdf</option>
         </select>
@@ -6479,11 +6476,16 @@ import { refreshWsPanelResize } from './wsPanelResize.js';
       openPanel();
       return;
     }
-    if (document.body.classList.contains('ws-explorer-view') && pane.parentNode?.id !== 'ws-workbench-column') {
+    if (document.body.classList.contains('ws-explorer-view') && !_editorInIdeLayout(pane)) {
       try {
         document.dispatchEvent(new CustomEvent('ws-adopt-editor-workbench'));
       } catch (_) {}
     }
+  }
+
+  function _editorInIdeLayout(pane) {
+    const parentId = pane?.parentNode?.id;
+    return parentId === 'ws-workbench-column' || parentId === 'ws-ide-desktop-grid';
   }
 
   export async function loadDocument(docId) {

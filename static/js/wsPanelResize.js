@@ -44,12 +44,24 @@ function _saveSizes() {
   try { localStorage.setItem(STORAGE_KEY, JSON.stringify(_sizes)); } catch (_) {}
 }
 
+function _gridRoot() {
+  return document.getElementById('ws-ide-desktop-grid');
+}
+
+function _zoneEl(zone) {
+  return document.querySelector(`[data-ws-zone="${zone}"]`);
+}
+
 function _ideRowLeft() {
+  const grid = _gridRoot();
+  if (grid) return grid.getBoundingClientRect().left;
   const files = document.getElementById('ws-explorer-pane');
   return files ? files.getBoundingClientRect().left : 0;
 }
 
 function _ideRowWidth() {
+  const grid = _gridRoot();
+  if (grid) return grid.getBoundingClientRect().width;
   const chat = document.getElementById('chat-container');
   if (!chat) return window.innerWidth - _ideRowLeft();
   const r = chat.getBoundingClientRect();
@@ -57,34 +69,56 @@ function _ideRowWidth() {
 }
 
 function _applySizes() {
-  const files = document.getElementById('ws-explorer-pane');
-  const chat = document.getElementById('chat-container');
-  const terminal = document.getElementById('ws-terminal-dock');
-  if (!terminal || !_sizes) return;
+  const grid = _gridRoot();
+  const leftEl = _zoneEl('left') || document.getElementById('ws-explorer-pane');
+  const rightEl = _zoneEl('right') || document.getElementById('chat-container');
+  const bottomEl = _zoneEl('centerBottom') || document.getElementById('ws-terminal-dock');
+  if (!bottomEl || !_sizes) return;
 
   const s = _sizes;
-  if (files) {
-    files.style.flex = `0 0 ${s.files}px`;
-    files.style.width = `${s.files}px`;
-    files.style.maxWidth = `${s.files}px`;
-  }
-  if (chat) {
-    chat.style.flex = `0 0 ${s.chat}px`;
-    chat.style.width = `${s.chat}px`;
-    chat.style.maxWidth = `${s.chat}px`;
-  }
-
-  terminal.style.flex = `0 0 ${s.terminal}px`;
-  terminal.style.height = `${s.terminal}px`;
-  terminal.style.maxHeight = `${s.terminal}px`;
-  terminal.style.minHeight = `${MIN_TERMINAL}px`;
-  terminal.style.display = 'flex';
-  terminal.style.visibility = 'visible';
-  terminal.style.overflow = 'hidden';
-
-  if (files) document.body.style.setProperty('--ws-files-width', `${s.files}px`);
-  if (chat) document.body.style.setProperty('--ws-chat-width', `${s.chat}px`);
+  document.body.style.setProperty('--ws-files-width', `${s.files}px`);
+  document.body.style.setProperty('--ws-chat-width', `${s.chat}px`);
   document.body.style.setProperty('--ws-terminal-height', `${s.terminal}px`);
+
+  if (grid) {
+    bottomEl.style.minHeight = `${MIN_TERMINAL}px`;
+    bottomEl.style.display = 'flex';
+    bottomEl.style.visibility = 'visible';
+    bottomEl.style.overflow = 'hidden';
+    bottomEl.style.flex = '';
+    bottomEl.style.height = '';
+    bottomEl.style.maxHeight = '';
+    if (leftEl) {
+      leftEl.style.flex = '';
+      leftEl.style.width = '';
+      leftEl.style.maxWidth = '';
+    }
+    if (rightEl) {
+      rightEl.style.flex = '';
+      rightEl.style.width = '';
+      rightEl.style.maxWidth = '';
+    }
+    return;
+  }
+
+  if (leftEl) {
+    leftEl.style.flex = `0 0 ${s.files}px`;
+    leftEl.style.width = `${s.files}px`;
+    leftEl.style.maxWidth = `${s.files}px`;
+  }
+  if (rightEl) {
+    rightEl.style.flex = `0 0 ${s.chat}px`;
+    rightEl.style.width = `${s.chat}px`;
+    rightEl.style.maxWidth = `${s.chat}px`;
+  }
+
+  bottomEl.style.flex = `0 0 ${s.terminal}px`;
+  bottomEl.style.height = `${s.terminal}px`;
+  bottomEl.style.maxHeight = `${s.terminal}px`;
+  bottomEl.style.minHeight = `${MIN_TERMINAL}px`;
+  bottomEl.style.display = 'flex';
+  bottomEl.style.visibility = 'visible';
+  bottomEl.style.overflow = 'hidden';
 }
 
 function _applyTerminalSizeOnly() {
@@ -155,8 +189,10 @@ function _clampChat(w) {
 }
 
 function _clampTerminal(h) {
-  const workbench = document.getElementById('ws-workbench-column');
-  const wbH = workbench?.getBoundingClientRect().height || 0;
+  const grid = _gridRoot();
+  const wbH = grid?.getBoundingClientRect().height
+    || document.getElementById('ws-workbench-column')?.getBoundingClientRect().height
+    || 0;
   const max = wbH > 0
     ? Math.max(MIN_TERMINAL, wbH - 80)
     : Math.round(window.innerHeight * MAX_TERMINAL_VH);
@@ -164,22 +200,34 @@ function _clampTerminal(h) {
   return Math.round(Math.max(MIN_TERMINAL, Math.min(max, vhCap, h)));
 }
 
+function _ensureResizeListeners() {
+  if (_onMove) return;
+  _onMove = (e) => _moveDrag(e);
+  _onUp = (e) => _endDrag(e);
+  document.addEventListener('pointermove', _onMove);
+  document.addEventListener('pointerup', _onUp);
+  document.addEventListener('pointercancel', _onUp);
+}
+
 function _startDrag(handle, kind, e) {
   if (e.button !== 0 && e.pointerType === 'mouse') return;
   e.preventDefault();
-  const files = document.getElementById('ws-explorer-pane');
-  const chat = document.getElementById('chat-container');
-  const terminal = document.getElementById('ws-terminal-dock');
+  const grid = _gridRoot();
+  const files = _zoneEl('left') || document.getElementById('ws-explorer-pane');
+  const chat = _zoneEl('right') || document.getElementById('chat-container');
+  const terminal = _zoneEl('centerBottom') || document.getElementById('ws-terminal-dock');
   if (!terminal) return;
 
   _sizes = _sizes || _loadSizes();
+  const gridRect = grid?.getBoundingClientRect();
   _drag = {
     kind,
     handle,
     pointerId: e.pointerId,
     filesLeft: files?.getBoundingClientRect().left ?? _ideRowLeft(),
     chatRight: chat?.getBoundingClientRect().right ?? (window.innerWidth - 8),
-    workbenchBottom: document.getElementById('ws-workbench-column')?.getBoundingClientRect().bottom
+    workbenchBottom: gridRect?.bottom
+      ?? document.getElementById('ws-workbench-column')?.getBoundingClientRect().bottom
       ?? terminal.getBoundingClientRect().bottom,
   };
   handle.classList.add('ws-ide-split-dragging');
@@ -239,19 +287,35 @@ function _reclampSizes() {
 }
 
 function _placeHandles() {
-  const files = document.getElementById('ws-explorer-pane');
+  const grid = _gridRoot();
+  const leftEl = _zoneEl('left') || document.getElementById('ws-explorer-pane');
+  const rightEl = _zoneEl('right') || document.getElementById('chat-container');
+  const centerTop = _zoneEl('centerTop') || document.getElementById('doc-editor-pane');
+  const centerBottom = _zoneEl('centerBottom') || document.getElementById('ws-terminal-dock');
   const workbench = document.getElementById('ws-workbench-column');
-  const chat = document.getElementById('chat-container');
-  const terminal = document.getElementById('ws-terminal-dock');
-  if (!files || !workbench || !chat || !terminal) return false;
+  const parent = grid || leftEl?.parentNode;
+  if (!leftEl || !rightEl || !centerBottom || !parent) return false;
 
   const hFiles = _ensureHandle('ws-split-files', 'v');
   const hChat = _ensureHandle('ws-split-chat', 'v');
   const hTerm = _ensureHandle('ws-split-terminal', 'h');
 
-  if (hFiles.previousElementSibling !== files) files.after(hFiles);
-  if (hChat.previousElementSibling !== workbench) workbench.after(hChat);
-  if (hTerm.nextElementSibling !== terminal) workbench.insertBefore(hTerm, terminal);
+  if (grid) {
+    if (!grid.contains(hFiles)) grid.appendChild(hFiles);
+    if (!grid.contains(hChat)) grid.appendChild(hChat);
+    if (!grid.contains(hTerm)) grid.appendChild(hTerm);
+    hFiles.style.gridArea = 'ws-zone-split-v';
+    hChat.style.gridArea = 'ws-zone-split-v2';
+    hTerm.style.gridArea = 'ws-zone-split-h';
+  } else if (workbench) {
+    if (hFiles.previousElementSibling !== leftEl) leftEl.after(hFiles);
+    if (hChat.previousElementSibling !== workbench) workbench.after(hChat);
+    if (hTerm.nextElementSibling !== centerBottom) workbench.insertBefore(hTerm, centerBottom);
+  } else {
+    if (hFiles.previousElementSibling !== leftEl) leftEl.after(hFiles);
+    if (centerTop && hTerm.nextElementSibling !== centerBottom) centerTop.after(hTerm);
+    if (hChat.nextElementSibling !== rightEl) rightEl.before(hChat);
+  }
 
   _wireHandle(hFiles, 'files');
   _wireHandle(hChat, 'chat');
@@ -273,13 +337,7 @@ export function mountWsPanelResize() {
 
   _applySizes();
 
-  if (!_onMove) {
-    _onMove = (e) => _moveDrag(e);
-    _onUp = (e) => _endDrag(e);
-    document.addEventListener('pointermove', _onMove);
-    document.addEventListener('pointerup', _onUp);
-    document.addEventListener('pointercancel', _onUp);
-  }
+  _ensureResizeListeners();
   if (!_onWinResize) {
     _onWinResize = () => _reclampSizes();
     window.addEventListener('resize', _onWinResize);
@@ -309,6 +367,7 @@ export function refreshWsPanelResize() {
   if (!_mounted) return;
   _placeHandles();
   _reclampSizes();
+  _ensureResizeListeners();
   requestAnimationFrame(() => {
     try { window.dispatchEvent(new Event('resize')); } catch (_) {}
   });

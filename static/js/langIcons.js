@@ -141,6 +141,11 @@ const ICONS = {
     '<path d="M17 17v2 M7 17v3 M11 17v3"/>' +
     '<path d="M18 12c1 0 1.5-.7 1.5-1.5"/>' +
     '<circle cx="7" cy="11" r="0.6" fill="currentColor"/>',
+  // Plain text — horizontal lines
+  text:
+    '<line x1="4" y1="7" x2="20" y2="7"/>' +
+    '<line x1="4" y1="12" x2="20" y2="12"/>' +
+    '<line x1="4" y1="17" x2="16" y2="17"/>',
   // Generic code fallback (used by toml/ini already; left as-is)
   code:
     '<polyline points="8 6 2 12 8 18"/>' +
@@ -162,6 +167,8 @@ const ALIASES = {
   rb: 'ruby',
   toml: 'yaml',
   ini: 'yaml',
+  txt: 'text',
+  log: 'text',
 };
 
 /**

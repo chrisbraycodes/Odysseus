@@ -32,7 +32,10 @@ const TABS = [
   {
     id: 'editor', label: 'Editor',
     getEl: () => document.getElementById('doc-editor-pane'),
-    onOpen: () => { try { window.documentModule?.openPanel?.(); } catch (_) {} },
+    onOpen: () => {
+      try { window.documentModule?.ensurePaneMounted?.(); } catch (_) {}
+      try { window.documentModule?.openPanel?.(); } catch (_) {}
+    },
     icon: `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>`,
   },
   {
@@ -78,13 +81,67 @@ let _lastLayoutKey = '';
 let _placeholders  = {};
 let _bodyObs       = null;
 let _lastTermKey   = '';
+/** @type {Map<string, { parent: Node, next: Node | null }>} */
+let _mobHome       = new Map();
 
 const MOB_HAMBURGER_GAP = 5;
 const MOB_HAMBURGER_LEFT = 8;
 const MOB_HAMBURGER_SIZE = 44;
 
 function _panelEl(id) {
-  return TABS.find((t) => t.id === id)?.getEl?.() ?? null;
+  const tab = TABS.find((t) => t.id === id);
+  return tab?.getEl?.() ?? null;
+}
+
+function _mobInsertAnchor() {
+  return _bar?.isConnected ? _bar : (_handle?.isConnected ? _handle : null);
+}
+
+function _hideDesktopIdeShell() {
+  ['ws-ide-desktop-grid', 'ws-workbench-column', 'ws-terminal-dock'].forEach((id) => {
+    const el = document.getElementById(id);
+    if (el) el.style.setProperty('display', 'none', 'important');
+  });
+}
+
+function _hoistPanelEl(el) {
+  if (!el?.isConnected || el.parentNode === document.body) return el;
+  if (!_mobHome.has(el.id)) {
+    _mobHome.set(el.id, { parent: el.parentNode, next: el.nextSibling });
+  }
+  const anchor = _mobInsertAnchor();
+  document.body.insertBefore(el, anchor);
+  return el;
+}
+
+function _restoreMobPanelHomes() {
+  for (const [id, home] of [..._mobHome.entries()]) {
+    const el = document.getElementById(id);
+    if (!el || !home.parent?.isConnected) continue;
+    try {
+      home.parent.insertBefore(el, home.next);
+    } catch (_) {
+      try { home.parent.appendChild(el); } catch (_) {}
+    }
+  }
+  _mobHome.clear();
+  ['ws-ide-desktop-grid', 'ws-workbench-column', 'ws-terminal-dock'].forEach((id) => {
+    document.getElementById(id)?.style.removeProperty('display');
+  });
+}
+
+/** Mount lazily-created panels and hoist them out of hidden desktop containers. */
+function _ensurePanelReady(id) {
+  const tab = TABS.find((t) => t.id === id);
+  if (!tab) return null;
+  try { tab.onOpen?.(); } catch (_) {}
+  let el = tab.getEl();
+  if (!el && id === 'terminal') {
+    el = document.getElementById('ws-mob-terminal-panel');
+  }
+  if (!el) return null;
+  _hideDesktopIdeShell();
+  return _hoistPanelEl(el);
 }
 
 /** DOM insert order ≠ _panels order (terminal node is before chat). Reorder so flex left-to-right matches _panels. */
@@ -187,13 +244,12 @@ function _load() {
       _panels = d.panels.filter((id) => TABS.some((t) => t.id === id)).slice(0, MAX_PANELS);
     }
     if (typeof d.splitPct === 'number') _splitPct = d.splitPct;
-    if (!_panels.length) _panels = ['chat'];
   } catch (_) {}
 }
 
 function _clampPanels() {
+  _panels = _panels.filter((id) => TABS.some((t) => t.id === id));
   if (_panels.length > MAX_PANELS) _panels = _panels.slice(-MAX_PANELS);
-  if (!_panels.length) _panels = ['chat'];
 }
 
 function _sidebarW() { return 0; }
@@ -329,6 +385,9 @@ function _apply({ force = false } = {}) {
   if (!force && key === _lastLayoutKey) return;
   _lastLayoutKey = key;
 
+  _hideDesktopIdeShell();
+  _panels.forEach((id) => _ensurePanelReady(id));
+
   const widths = _panelWidths(availW);
 
   TABS.forEach(({ id, getEl }) => {
@@ -393,6 +452,7 @@ function _apply({ force = false } = {}) {
   _hadTerminal = hasTerminal;
 
   document.body.dataset.wsMobLeft = _panels[0] || '';
+  if (!_panels.length) delete document.body.dataset.wsMobLeft;
   _syncHamburgerPlacement();
   _syncTerminalTitleGap();
   requestAnimationFrame(() => _syncTerminalTitleGap());
@@ -411,14 +471,13 @@ function _focusPanel(id) {
   if (!isMobileIdeLayout() || !_active) return;
   const tab = TABS.find((t) => t.id === id);
   if (!tab) return;
-  if (!tab.getEl() && tab.onOpen) tab.onOpen();
   if (!_panels.includes(id)) {
     if (_panels.length >= MAX_PANELS) _panels.shift();
     _panels.push(id);
   }
   _lastLayoutKey = '';
   _scheduleApply({ force: true });
-  if (!tab.getEl()) setTimeout(() => _scheduleApply({ force: true }), 120);
+  if (!_panelEl(id)) setTimeout(() => _scheduleApply({ force: true }), 120);
 }
 
 function _toggle(id) {
@@ -428,20 +487,17 @@ function _toggle(id) {
   const idx = _panels.indexOf(id);
 
   if (idx >= 0) {
-    if (_panels.length <= 1) return;
     _panels.splice(idx, 1);
     _lastLayoutKey = '';
     _scheduleApply({ force: true });
     return;
   }
 
-  if (!tab.getEl() && tab.onOpen) tab.onOpen();
-
   if (_panels.length >= MAX_PANELS) _panels.shift();
   _panels.push(id);
   _lastLayoutKey = '';
   _scheduleApply({ force: true });
-  if (!tab.getEl()) setTimeout(() => _scheduleApply({ force: true }), 120);
+  if (!_panelEl(id)) setTimeout(() => _scheduleApply({ force: true }), 120);
 }
 
 function _makeHandle() {
@@ -570,6 +626,7 @@ function _cleanup() {
   _lastTermKey = '';
   clearTimeout(_saveTimer);
   _restoreHamburgerHome();
+  _restoreMobPanelHomes();
   _ensureDesktopIdePanelsVisible();
   _clearPlaceholders();
   const termTitle = document.querySelector('#ws-mob-terminal-panel .ws-terminal-dock-title');
@@ -652,6 +709,7 @@ export function mountMobilePanels() {
   if (_active) _cleanup();
 
   _load();
+  if (!_panels.length) _panels = ['chat'];
   _clampPanels();
   _active = true;
   document.body.classList.add('ws-mob-view');
@@ -668,6 +726,9 @@ export function mountMobilePanels() {
   _wireGlobalListeners();
   _lastLayoutKey = '';
   _scheduleApply({ force: true });
+  if (document.body.classList.contains('ws-explorer-view')) {
+    try { document.dispatchEvent(new CustomEvent('prepare-workspace-terminal')); } catch (_) {}
+  }
 }
 
 export function unmountMobilePanels() {

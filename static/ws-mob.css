@@ -196,6 +196,8 @@ body.ws-mob-view #ws-mob-terminal-panel {
 
 body.ws-mob-view #ws-workbench-column,
 
+body.ws-mob-view #ws-ide-desktop-grid,
+
 body.ws-mob-view #doc-divider {
 
   display: none !important;

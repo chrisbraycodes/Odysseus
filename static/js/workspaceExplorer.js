@@ -18,6 +18,7 @@ import {
 } from './workspace.js';
 import { createWorkspaceTerminalPanel } from './workspaceTerminal.js';
 import { mountWsPanelResize, unmountWsPanelResize, refreshWsPanelResize } from './wsPanelResize.js';
+import { mountWsPanelLayout, unmountWsPanelLayout, refreshWsPanelLayout } from './wsPanelLayout.js';
 import { isMobileIdeLayout, IDE_LAYOUT_EVENT } from './ideLayoutMode.js';
 import { openWorkspaceSavePicker } from './wsEditorSave.js';
 import documentModule from './document.js';
@@ -39,6 +40,23 @@ let _treePath = '';
 let _expanded = new Set(['']);
 let _terminal = null;
 let _lastSyncedRoot = '';
+let _loadTreeGen = 0;
+let _loadTreeInflight = null;
+
+function _syncTreeFileTabState() {
+  const body = _pane?.querySelector('#ws-tree-body');
+  if (!body) return;
+  const { activePath, openPaths } = _fileTabState();
+  body.querySelectorAll('.ws-tree-row.ws-tree-file').forEach((row) => {
+    const p = row.dataset.path || '';
+    row.classList.toggle('ws-tree-active', p === activePath);
+    row.classList.toggle('ws-tree-open', openPaths.has(p));
+  });
+}
+
+function _treeHasRows() {
+  return !!_pane?.querySelector('#ws-tree-body .ws-tree-row');
+}
 
 function _wsRoot() {
   return getVerifiedWorkspace()?.path || '';
@@ -70,10 +88,9 @@ function _openFileInEditor(detail) {
     mod.openWorkspaceFile(detail);
   } else {
     document.dispatchEvent(new CustomEvent('open-workspace-file', { detail, bubbles: true }));
+    if (!_isMobileLayout()) _ensureEditorInWorkbench();
   }
-  if (!_isMobileLayout()) {
-    _ensureEditorInWorkbench();
-  } else {
+  if (_isMobileLayout()) {
     try {
       document.dispatchEvent(new CustomEvent('ws-mob-focus-panel', { detail: { panel: 'editor' } }));
     } catch (_) {}
@@ -282,26 +299,56 @@ function _clearTreeError() {
   }
 }
 
-async function _loadTree(path = _treePath) {
-  let root;
+async function _loadTree(path = _treePath, { silent = false } = {}) {
+  if (_loadTreeInflight?.path === path) return _loadTreeInflight.promise;
+
+  const gen = ++_loadTreeGen;
+  const promise = (async () => {
+    let root;
+    try {
+      root = await _verifiedRoot();
+    } catch (_) {
+      if (gen !== _loadTreeGen) return;
+      if (_treeHasRows()) {
+        _syncTreeFileTabState();
+        return;
+      }
+      _renderTreeError('No workspace folder selected — open + → Workspace and choose your project folder.');
+      return;
+    }
+    if (!_pane || gen !== _loadTreeGen) return;
+    const prevPath = _treePath;
+    _treePath = path;
+    const pathEl = _pane.querySelector('#ws-tree-path');
+    if (pathEl) pathEl.textContent = path ? `/${path}` : '';
+    const body = _pane.querySelector('#ws-tree-body');
+    const showLoading = !silent && (!_treeHasRows() || path !== prevPath);
+    if (body && showLoading) body.innerHTML = '<div class="ws-explorer-loading">Loading…</div>';
+    try {
+      const data = await _fetchList(root, path);
+      if (gen !== _loadTreeGen || !_pane) return;
+      _clearTreeError();
+      _renderTree(data);
+    } catch (e) {
+      if (gen !== _loadTreeGen || !_pane) return;
+      if (_treeHasRows()) {
+        const banner = _pane.querySelector('#ws-tree-status');
+        if (banner) {
+          banner.textContent = e.message || 'Could not refresh folder';
+          banner.classList.add('ws-tree-status-error');
+          banner.style.display = '';
+        }
+        return;
+      }
+      _renderTreeError(e.message || 'Unknown error');
+    }
+  })();
+
+  _loadTreeInflight = { path, promise };
   try {
-    root = await _verifiedRoot();
-  } catch (_) {
-    _renderTreeError('No workspace folder selected — open + → Workspace and choose your project folder.');
-    return;
-  }
-  if (!_pane) return;
-  _treePath = path;
-  const pathEl = _pane.querySelector('#ws-tree-path');
-  if (pathEl) pathEl.textContent = path ? `/${path}` : '';
-  const body = _pane.querySelector('#ws-tree-body');
-  if (body) body.innerHTML = '<div class="ws-explorer-loading">Loading…</div>';
-  try {
-    const data = await _fetchList(root, path);
-    _clearTreeError();
-    _renderTree(data);
-  } catch (e) {
-    _renderTreeError(e.message || 'Unknown error');
+    await promise;
+  } finally {
+    if (_loadTreeInflight?.promise === promise) _loadTreeInflight = null;
   }
 }
 
@@ -504,12 +551,19 @@ function _ensureMobileTerminalPanel() {
   chat.parentNode.insertBefore(panel, chat);
 }
 
+function _syncTerminalDockRef() {
+  const td = document.getElementById('ws-terminal-dock');
+  if (td?.isConnected) _terminalDock = td;
+  else if (_terminalDock && !_terminalDock.isConnected) _terminalDock = null;
+}
+
 function _terminalMountEl() {
   if (_isMobileLayout()) {
     _ensureMobileTerminalPanel();
     return document.getElementById('ws-mob-terminal-mount');
   }
-  return _terminalDock?.querySelector('#ws-terminal-mount');
+  _syncTerminalDockRef();
+  return document.getElementById('ws-terminal-mount');
 }
 
 function _buildPane() {
@@ -634,29 +688,41 @@ function _renderTerminalPlaceholder() {
   });
 }
 
+function _terminalInCurrentMount(mount) {
+  if (!mount) return false;
+  return !!mount.querySelector('.ws-terminal-tabs');
+}
+
 function _prepareWorkspaceTerminal() {
   if (_isMobileLayout()) _ensureMobileTerminalPanel();
   const mount = _terminalMountEl();
   if (!mount) return;
   if (!_workspaceForTerminal()) {
+    if (_terminal) _disposeTerminal();
     _renderTerminalPlaceholder();
     return;
   }
-  if (!_terminal) _mountTerminal();
-  else {
-    try { _terminal.fitAll?.(); } catch (_) {}
+  if (!_terminal || !_terminalInCurrentMount(mount)) {
+    _mountTerminal();
+    return;
   }
+  try { _terminal.fitAll?.(); } catch (_) {}
 }
 
-function _mountTerminal() {
-  _disposeTerminal();
-  const mount = _terminalMountEl();
-  if (!mount) return;
+function _mountTerminal({ force = false } = {}) {
   const ws = _workspaceForTerminal();
+  const mount = _terminalMountEl();
   if (!ws) {
-    _renderTerminalPlaceholder();
+    if (_terminal) _disposeTerminal();
+    if (mount) _renderTerminalPlaceholder();
     return;
   }
+  if (!mount) return;
+  if (!force && _terminal && _terminalInCurrentMount(mount)) {
+    try { _terminal.fitAll?.(); } catch (_) {}
+    return;
+  }
+  _disposeTerminal();
   mount.innerHTML = '';
   _terminal = createWorkspaceTerminalPanel(mount, { workspace: ws });
 }
@@ -678,13 +744,27 @@ function _resetEditorWorkbenchLayout(pane) {
 }
 
 function _syncWorkbenchRefsFromDom() {
-  if (!_workbenchCol) {
-    _workbenchCol = document.getElementById('ws-workbench-column');
-    _terminalDock = document.getElementById('ws-terminal-dock');
-  }
+  const wb = document.getElementById('ws-workbench-column');
+  const td = document.getElementById('ws-terminal-dock');
+  if (wb?.isConnected) _workbenchCol = wb;
+  else if (_workbenchCol && !_workbenchCol.isConnected) _workbenchCol = null;
+  if (td?.isConnected) _terminalDock = td;
+  else if (_terminalDock && !_terminalDock.isConnected) _terminalDock = null;
+}
+
+function _usesGridLayout() {
+  return document.body.classList.contains('ws-ide-grid-layout')
+    || !!document.getElementById('ws-ide-desktop-grid');
+}
+
+function _clearWorkbenchRefs() {
+  document.getElementById('ws-workbench-column')?.remove();
+  if (_workbenchCol && !_workbenchCol.isConnected) _workbenchCol = null;
+  _syncTerminalDockRef();
 }
 
 function _adoptEditorIntoWorkbench() {
+  if (_isMobileLayout() || _usesGridLayout()) return;
   _syncWorkbenchRefsFromDom();
   const workbench = _workbenchCol || document.getElementById('ws-workbench-column');
   const terminal = _terminalDock || document.getElementById('ws-terminal-dock');
@@ -700,6 +780,7 @@ function _notifyTerminalLayout() {
   requestAnimationFrame(() => {
     _guardWorkbenchTerminalVisible();
     if (!_isMobileLayout()) {
+      try { refreshWsPanelLayout(); } catch (_) {}
       try { refreshWsPanelResize(); } catch (_) {}
       try { window.dispatchEvent(new Event('resize')); } catch (_) {}
     }
@@ -710,11 +791,12 @@ function _notifyTerminalLayout() {
 /** Desktop: editor height:100% / inline flex can cover the terminal dock (overflow hidden). */
 function _guardWorkbenchTerminalVisible() {
   if (_isMobileLayout()) return;
-  const workbench = document.getElementById('ws-workbench-column');
+  const container = document.getElementById('ws-ide-desktop-grid')
+    || document.getElementById('ws-workbench-column');
   const terminal = document.getElementById('ws-terminal-dock');
   const pane = document.getElementById('doc-editor-pane');
-  if (!workbench || !terminal) return;
-  const wb = workbench.getBoundingClientRect();
+  if (!container || !terminal) return;
+  const wb = container.getBoundingClientRect();
   const td = terminal.getBoundingClientRect();
   const clipped = td.height < 80 || td.bottom > wb.bottom + 2 || td.top >= wb.bottom - 4;
   if (!clipped) return;
@@ -726,8 +808,14 @@ function _ensureWorkbenchColumn() {
   if (_isMobileLayout()) return true;
   const chat = document.getElementById('chat-container');
   if (!chat) return false;
+  if (_usesGridLayout()) {
+    mountWsPanelLayout();
+    _notifyTerminalLayout();
+    return true;
+  }
   _syncWorkbenchRefsFromDom();
-  if (!_workbenchCol) {
+  _syncTerminalDockRef();
+  if (!_workbenchCol && !document.getElementById('ws-terminal-dock')) {
     _workbenchCol = document.createElement('div');
     _workbenchCol.id = 'ws-workbench-column';
     _workbenchCol.className = 'ws-workbench-column';
@@ -745,16 +833,25 @@ function _ensureWorkbenchColumn() {
       <div class="ws-terminal-mount" id="ws-terminal-mount"></div>`;
     _workbenchCol.appendChild(_terminalDock);
   }
+  if (!_workbenchCol) {
+    _workbenchCol = document.createElement('div');
+    _workbenchCol.id = 'ws-workbench-column';
+    _workbenchCol.className = 'ws-workbench-column';
+    if (_terminalDock && !_terminalDock.parentNode) {
+      _workbenchCol.appendChild(_terminalDock);
+    }
+  }
   if (!_workbenchCol.parentNode) {
     chat.parentNode.insertBefore(_workbenchCol, chat);
   }
   _adoptEditorIntoWorkbench();
-  mountWsPanelResize();
+  mountWsPanelLayout();
   _notifyTerminalLayout();
   return true;
 }
 
 function _releaseWorkbench() {
+  unmountWsPanelLayout();
   const pane = document.getElementById('doc-editor-pane');
   const chat = document.getElementById('chat-container');
   const divider = document.getElementById('doc-divider');
@@ -771,13 +868,22 @@ function _releaseWorkbench() {
   }
   _workbenchCol?.remove();
   _workbenchCol = null;
-  _terminalDock = null;
+  _syncTerminalDockRef();
 }
 
 function _ensureEditorInWorkbench() {
   if (_isMobileLayout()) return;
-  _ensureWorkbenchColumn();
   const docMod = _docMod();
+  if (_usesGridLayout()) {
+    if (docMod) {
+      docMod.ensurePaneMounted?.();
+      if (!docMod.isPanelOpen?.()) docMod.openPanel?.();
+    }
+    mountWsPanelLayout();
+    _notifyTerminalLayout();
+    return;
+  }
+  _ensureWorkbenchColumn();
   if (!docMod) return;
   docMod.ensurePaneMounted?.();
   if (!docMod.isPanelOpen?.()) {
@@ -805,16 +911,15 @@ function _isMobileLayout() {
 function _onIdeLayoutModeChange() {
   if (!_isOpen) return;
   if (_isMobileLayout()) {
+    unmountWsPanelLayout();
     unmountWsPanelResize();
     _releaseWorkbench();
     _ensureMobileTerminalPanel();
   } else {
     _ensureWorkbenchColumn();
-    mountWsPanelResize();
-    _adoptEditorIntoWorkbench();
-    _docMod()?.ensurePaneMounted?.();
+    mountWsPanelLayout();
   }
-  _mountTerminal();
+  _prepareWorkspaceTerminal();
   _notifyTerminalLayout();
 }
 
@@ -856,7 +961,8 @@ async function _syncExplorerToWorkspace({ clearEditorTabs = false } = {}) {
   _expanded = new Set(['']);
   if (clearEditorTabs || rootChanged) _docMod()?.clearWorkspaceFiles?.();
   _syncWorkspaceLabel();
-  _mountTerminal();
+  if (rootChanged) _mountTerminal({ force: true });
+  else _prepareWorkspaceTerminal();
   await _loadTree('');
   _notifyTerminalLayout();
   return true;
@@ -928,7 +1034,8 @@ async function _onWorkspaceChanged(e) {
 }
 
 function _onWorkspaceFileTabsChanged() {
-  if (_isOpen && _wsRoot()) _loadTree(_treePath);
+  if (!_isOpen || !_wsRoot()) return;
+  _syncTreeFileTabState();
 }
 
 /** Restore file tree + terminal from verified workspace store (survives browser refresh). */
@@ -951,11 +1058,13 @@ export async function restoreWorkspaceIde() {
   if (_isMobileLayout()) {
     _ensureMobileTerminalPanel();
     _prepareWorkspaceTerminal();
+    _notifyTerminalLayout();
     return;
   }
 
   _ensureWorkbenchColumn();
   _ensureEditorInWorkbench();
+  mountWsPanelLayout();
   _docMod()?.openPanel?.();
   _docMod()?.ensurePaneMounted?.();
   _adoptEditorIntoWorkbench();
@@ -989,6 +1098,7 @@ export function initWorkspaceExplorer() {
   document.addEventListener('ws-adopt-editor-workbench', () => {
     if (!_isMobileLayout()) _ensureEditorInWorkbench();
   });
+  document.addEventListener('ws-panel-layout-mounted', _clearWorkbenchRefs);
   document.addEventListener('workspace-environment-ready', () => {
     restoreWorkspaceIde().catch(() => {});
   });
@@ -997,8 +1107,15 @@ export function initWorkspaceExplorer() {
   });
   document.addEventListener('workspace-changed', _onWorkspaceChanged);
   document.addEventListener('workspace-file-tabs-changed', _onWorkspaceFileTabsChanged);
-  document.addEventListener('workspace-file-saved', () => {
-    if (_isOpen && _wsRoot()) _loadTree(_treePath);
+  document.addEventListener('workspace-file-saved', (e) => {
+    if (!_isOpen || !_wsRoot()) return;
+    const savedPath = e.detail?.path || '';
+    const visible = savedPath && _pane?.querySelector(`#ws-tree-body .ws-tree-row[data-path="${CSS.escape(savedPath)}"]`);
+    if (visible) {
+      _syncTreeFileTabState();
+      return;
+    }
+    _loadTree(_treePath, { silent: true });
   });
   document.addEventListener('open-workspace-explorer', () => {
     openPanel().catch(() => {});
