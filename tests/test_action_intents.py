@@ -58,6 +58,15 @@ def test_workspace_file_delete_promotes_to_agent():
     assert intent.category == "workspace"
 
 
+def test_workspace_analyze_and_access_questions_promote_to_agent():
+    from src.action_intents import needs_workspace_agent
+
+    assert message_needs_tools("analyze this project")
+    assert message_needs_tools("can you read the files in my workspace")
+    assert needs_workspace_agent("which file shows the readme on the home page")
+    assert classify_tool_intent("look at the files in this folder").category == "workspace"
+
+
 def test_explanatory_calendar_questions_stay_plain_chat():
     assert not message_needs_tools("How do I add an entry to my calendar?")
     assert not message_needs_tools("What about the built-in Odysseus calendar, is that linked to email?")

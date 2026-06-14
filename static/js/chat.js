@@ -809,6 +809,14 @@ import { createStreamRenderer } from './streamingRenderer.js';
       if (!isAgentMode && documentModule && documentModule.isPanelOpen() && documentModule.getCurrentDocId()) {
         isAgentMode = true;
       }
+      const _wsForMode = workspaceModule.getWorkspace()
+        || (Storage.KEYS && Storage.get(Storage.KEYS.WORKSPACE, ''))
+        || '';
+      // Workspace analyze/locate needs Agent mode — Chat has no read_file/grep.
+      if (!isAgentMode && _wsForMode && workspaceModule.messageNeedsWorkspaceAgent
+          && workspaceModule.messageNeedsWorkspaceAgent(msg)) {
+        isAgentMode = true;
+      }
       fd.append('mode', isAgentMode ? 'agent' : 'chat');
       if (el('web-toggle').checked) {
         if (isAgentMode) {
@@ -1048,8 +1056,13 @@ import { createStreamRenderer } from './streamingRenderer.js';
           if (m) errText = m[1].replace(/\\"/g, '"');
           else if (errBody.length < 200) errText = errBody;
         } catch {}
-        // Auto-switch to chat mode for tool-related errors
-        if (errText.includes('tool') || errText.includes('auto')) {
+        // Auto-switch to chat mode for tool-related errors (not when workspace needs files)
+        const _wsOnError = workspaceModule.getWorkspace()
+          || (Storage.KEYS && Storage.get(Storage.KEYS.WORKSPACE, ''))
+          || '';
+        const _wsNeedsAgent = _wsOnError && workspaceModule.messageNeedsWorkspaceAgent
+          && workspaceModule.messageNeedsWorkspaceAgent(msg);
+        if ((errText.includes('tool') || errText.includes('auto')) && !_wsNeedsAgent) {
           errText = 'This model doesn\'t support agent tools — switched to Chat mode. Try again.';
           const _ab = document.getElementById('mode-agent-btn');
           const _cb = document.getElementById('mode-chat-btn');
@@ -1064,6 +1077,8 @@ import { createStreamRenderer } from './streamingRenderer.js';
             _st.mode = 'chat';
             Storage.setJSON(Storage.KEYS.TOGGLES, _st);
           }
+        } else if (_wsNeedsAgent && (errText.includes('tool') || errText.includes('auto'))) {
+          errText = 'Agent tools failed for this model. Stay in Agent mode for workspace file access — try again or use a larger model.';
         }
         typewriterInto(holder.querySelector('.body'), errText);
         enableResearchBtn();

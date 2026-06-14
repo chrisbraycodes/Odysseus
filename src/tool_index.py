@@ -375,6 +375,10 @@ class ToolIndex:
                    "how does this work", "what is this project", "what is this website",
                    "repo structure", "trace the flow", "whole workspace", "index workspace"}):
             {"workspace_index", "workspace_search", "grep", "glob", "read_file", "ls"},
+        frozenset({"which file", "what file", "where is", "where does", "find the file",
+                   "figure out which", "read each file", "home page", "this site",
+                   "handles", "responsible for", "locate"}):
+            {"grep", "glob", "read_file", "ls"},
         # Chat/session management. "rename" alone maps to documents below, so a
         # request like "rename the last 12 sessions/chats" needs these session
         # keywords to surface the right tools (NOT app_api — /api/sessions is

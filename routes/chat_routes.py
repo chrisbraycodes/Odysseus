@@ -477,6 +477,22 @@ def setup_chat_routes(
         except (ValueError, ValidationError):
             raise HTTPException(400, "Invalid request parameters")
 
+        # Re-classify after coerce/enhancement — the first pass above used the
+        # raw form message; workspace analyze/locate must not stay in chat mode.
+        from src.action_intents import needs_workspace_agent as _needs_workspace_agent
+        _tool_intent = _classify_tool_intent(message) if isinstance(message, str) else _tool_intent
+        if chat_mode == "chat" and _tool_intent and _tool_intent.needs_tools:
+            chat_mode = "agent"
+            auto_escalated = True
+            logger.info(
+                "chat→agent re-escalation (post-coerce): category=%s reason=%s",
+                _tool_intent.category,
+                _tool_intent.reason,
+            )
+        _needs_workspace_tools = (
+            _needs_workspace_agent(message) if isinstance(message, str) else False
+        )
+
         # ------------------------------------------------------------------ #
         # Privilege gates that must fire BEFORE any LLM work / token spend.
         #   1. allowed_models — reject if session.model isn't in the user's
@@ -692,6 +708,34 @@ def setup_chat_routes(
             # the outer scope. (Was `nonlocal` but never reassigned.)
             research_sources = None
             web_sources = ctx.web_sources
+
+            # Workspace file/code requests need agent tools — chat mode has none
+            # and small models will hallucinate "no filesystem access".
+            if _needs_workspace_tools and chat_mode == "chat":
+                _agent_msg = (
+                    "Workspace file analysis requires **Agent mode**. "
+                    "Switch to Agent (toggle above the chat input) and send again."
+                )
+                yield f'data: {json.dumps({"delta": _agent_msg})}\n\n'
+                yield "data: [DONE]\n\n"
+                _active_streams.pop(session, None)
+                return
+            if _needs_workspace_tools and not workspace:
+                _ws_msg = (
+                    "Select a valid workspace folder before analyzing or searching project files. "
+                    "Open the workspace picker (+ menu → Workspace, or `/workspace pick`)."
+                )
+                if _raw_workspace:
+                    _ws_msg = (
+                        f"The workspace path `{_raw_workspace}` is not valid on the server. "
+                        "Re-pick your project folder in the workspace picker "
+                        "(e.g. your project folder on Desktop)."
+                    )
+                yield f'data: {json.dumps({"type": "workspace_required", "data": {"message": _ws_msg, "invalid": bool(_raw_workspace)}})}\n\n'
+                yield f'data: {json.dumps({"delta": _ws_msg})}\n\n'
+                yield "data: [DONE]\n\n"
+                _active_streams.pop(session, None)
+                return
 
             # Register active stream for partial-save safety net
             _active_streams[session] = {"status": "streaming", "partial": "", "query": message, "is_research": do_research, "mode": _effective_mode}

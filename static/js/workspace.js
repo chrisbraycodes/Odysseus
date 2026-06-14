@@ -85,6 +85,22 @@ export function getVerifiedWorkspace() {
 }
 
 /** Canonical workspace path for chat requests and IDE APIs. */
+/** True when the message needs Agent mode to read/search the workspace. */
+export function messageNeedsWorkspaceAgent(text) {
+  if (!text || typeof text !== 'string') return false;
+  const t = text.trim();
+  if (!t) return false;
+  return (
+    /\b(?:analyze|analyse|review|explore|inspect|scan|summarize|summarise|audit)\b/i.test(t)
+    || /\b(?:which|what)\s+file\b/i.test(t)
+    || /\bwhere\s+(?:is|does|would|can)\b/i.test(t)
+    || /\b(?:find|locate|figure\s+out)\b.{0,80}\b(?:file|files|component|module)\b/i.test(t)
+    || /\b(?:make|create|write|delete|remove)\b.{0,60}\b(?:file|files|txt|document)\b/i.test(t)
+    || /\b(?:can|could)\s+you\s+(?:analyze|analyse|read|access|see|inspect)\b/i.test(t)
+    || /\bwhat\s+(?:is|does)\s+(?:this\s+)?(?:project|codebase|repo|app|website)\b/i.test(t)
+  );
+}
+
 export function getWorkspace() {
   const v = getVerifiedWorkspace();
   return v?.path || Storage.get(KEYS.WORKSPACE, '') || '';
@@ -565,5 +581,6 @@ export default {
   ensureWorkspaceReady,
   whenWorkspaceReady,
   isDockerWorkspace,
+  messageNeedsWorkspaceAgent,
   WORKSPACE_VERIFIED_EVENT,
 };

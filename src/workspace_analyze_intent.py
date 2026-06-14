@@ -24,6 +24,14 @@ _WHOLE_WORKSPACE = re.compile(
     r"\b(?:analyze|analyse|review|explore|scan|summarize|summarise)\b.{{0,40}}\b(?:whole\s+)?workspace\b",
     re.I,
 )
+_FILES_IN_PROJECT = re.compile(
+    r"\b(?:analyze|analyse|read|look\s+at|check|go\s+through|access|see)\b.{{0,60}}\b(?:files?|folders?|directories)\b",
+    re.I,
+)
+_ACCESS_QUESTION = re.compile(
+    r"\b(?:can|could)\s+you\s+(?:analyze|analyse|read|access|see|inspect)\b.{{0,60}}\b(?:files?|workspace|project|codebase)\b",
+    re.I,
+)
 
 
 def is_workspace_analyze_request(text: str) -> bool:
@@ -40,6 +48,10 @@ def is_workspace_analyze_request(text: str) -> bool:
     if _STACK_QUESTION.search(t):
         return True
     if _WHOLE_WORKSPACE.search(t):
+        return True
+    if _FILES_IN_PROJECT.search(t):
+        return True
+    if _ACCESS_QUESTION.search(t):
         return True
     return False
 

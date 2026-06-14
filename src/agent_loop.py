@@ -1813,9 +1813,13 @@ async def stream_agent_loop(
         from src.direct_shell import direct_shell_system_note, last_user_message
         from src.workspace_analyze_intent import workspace_analyze_system_note
         from src.workspace_file_intent import workspace_file_create_system_note
+        from src.workspace_locate_intent import workspace_locate_system_note
         _user_cmd = last_user_message(messages)
         _exec_note = workspace_file_create_system_note(_user_cmd)
         _note_kind = "workspace-file-create"
+        if not _exec_note:
+            _exec_note = workspace_locate_system_note(_user_cmd)
+            _note_kind = "workspace-locate"
         if not _exec_note:
             _exec_note = workspace_analyze_system_note(_user_cmd)
             _note_kind = "workspace-analyze"
@@ -1823,13 +1827,14 @@ async def stream_agent_loop(
             _exec_note = direct_shell_system_note(_user_cmd)
             _note_kind = "direct-shell"
         if _exec_note:
-            _blocked = (
-                "write_file" in (disabled_tools or set())
-                if _note_kind == "workspace-file-create"
-                else "read_file" in (disabled_tools or set())
-                if _note_kind == "workspace-analyze"
-                else "bash" in (disabled_tools or set())
-            )
+            if _note_kind == "workspace-file-create":
+                _blocked = "write_file" in (disabled_tools or set())
+            elif _note_kind == "workspace-locate":
+                _blocked = "grep" in (disabled_tools or set())
+            elif _note_kind == "workspace-analyze":
+                _blocked = "read_file" in (disabled_tools or set())
+            else:
+                _blocked = "bash" in (disabled_tools or set())
             if not _blocked:
                 if messages and messages[0].get("role") == "system":
                     messages[0]["content"] = _exec_note + "\n\n" + (messages[0].get("content") or "")
@@ -1933,6 +1938,11 @@ async def stream_agent_loop(
         r"ensure that|troubleshoot|step-by-step)\b",
         re.IGNORECASE,
     )
+    # Prose shell/file commands (cat foo.js) — do not execute; common 7B failure mode.
+    _CAT_PROSE_RE = re.compile(
+        r"(?:^|\n)\s*(?:cat|type|open|inspect)\s+[\w./~-]+",
+        re.IGNORECASE | re.MULTILINE,
+    )
     _awaiting_user = False  # set by ask_user → end the turn and wait for a choice
 
     # Document streaming state (persists across rounds)
@@ -1993,6 +2003,80 @@ async def stream_agent_loop(
                 )
         except Exception as _auto_scan_err:
             logger.warning("[auto-workspace-scan] skipped: %s", _auto_scan_err)
+
+    if (
+        session_id
+        and "grep" not in (disabled_tools or set())
+        and not plan_mode
+    ):
+        try:
+            from src.direct_shell import last_user_message
+            from src.workspace_locate_orchestration import (
+                format_workspace_locate_sse,
+                run_auto_workspace_locate_if_needed,
+            )
+            _loc_user = last_user_message(messages)
+            _auto_locate = await run_auto_workspace_locate_if_needed(
+                user_msg=_loc_user,
+                workspace=workspace,
+                approved_plan=approved_plan or "",
+                session_id=session_id,
+                owner=owner,
+            )
+            if _auto_locate:
+                if _auto_locate.workspace:
+                    workspace = _auto_locate.workspace
+                for chunk in format_workspace_locate_sse(_auto_locate):
+                    yield chunk
+                tool_events.extend(_auto_locate.tool_events)
+                if _auto_locate.fallback_summary:
+                    _orchestration_fallback = _auto_locate.fallback_summary
+                elif _auto_locate.files_read or _auto_locate.grep_hit_count:
+                    top = _auto_locate.files_read or [
+                        ln.split(":", 1)[0]
+                        for ev in _auto_locate.tool_events
+                        if ev.get("tool") == "grep"
+                        for ln in (ev.get("output") or "").splitlines()[:3]
+                        if ":" in ln
+                    ]
+                    if top:
+                        _orchestration_fallback = (
+                            "## Likely source files (from grep)\n"
+                            + "\n".join(f"- `{p}`" for p in top[:8])
+                            + "\n\n_Auto-generated — model did not summarize._"
+                        )
+                if _auto_locate.skip_llm:
+                    full_response = _auto_locate.assistant_message
+                    round_texts = [full_response]
+                    yield f"data: {json.dumps({'delta': full_response})}\n\n"
+                    total_duration = time.time() - total_start
+                    metrics = _compute_final_metrics(
+                        messages, full_response, total_duration, time_to_first_token,
+                        context_length, real_input_tokens, real_output_tokens,
+                        has_real_usage, tool_events, round_texts, model=actual_model,
+                        last_round_input_tokens=last_round_input_tokens,
+                        prep_timings=prep_timings,
+                        backend_gen_tps=backend_gen_tps,
+                        backend_prefill_tps=backend_prefill_tps,
+                    )
+                    metrics["requested_model"] = requested_model
+                    yield f"data: {json.dumps({'type': 'metrics', 'data': metrics})}\n\n"
+                    yield "data: [DONE]\n\n"
+                    return
+                locate_msg = {"role": "system", "content": _auto_locate.search_context}
+                insert_at = 1 if messages and messages[0].get("role") == "system" else 0
+                messages.insert(insert_at, locate_msg)
+                messages.append({
+                    "role": "system",
+                    "content": _auto_locate.assistant_message,
+                })
+                messages = _apply_agent_context_trim(
+                    messages,
+                    context_length=context_length,
+                    max_tokens=max_tokens or 1024,
+                )
+        except Exception as _auto_locate_err:
+            logger.warning("[auto-workspace-locate] skipped: %s", _auto_locate_err)
 
     if session_id and "write_file" not in (disabled_tools or set()) and not plan_mode:
         try:
@@ -2503,6 +2587,11 @@ async def stream_agent_loop(
                 and _TUTORIAL_RE.search(_intent_text)
                 and _intent_nudge_count < _MAX_INTENT_NUDGES
             )
+            _looks_like_cat_prose = (
+                "```" not in _intent_text
+                and _CAT_PROSE_RE.search(_intent_text)
+                and _intent_nudge_count < _MAX_INTENT_NUDGES
+            )
             _looks_like_promise = (
                 (
                     _intent_match is not None
@@ -2510,6 +2599,7 @@ async def stream_agent_loop(
                     and "```" not in _intent_text
                 )
                 or _looks_like_tutorial
+                or _looks_like_cat_prose
             ) and _intent_nudge_count < _MAX_INTENT_NUDGES
             if _looks_like_promise:
                 _intent_nudge_count += 1
@@ -2533,6 +2623,13 @@ async def stream_agent_loop(
                         "The user wants you to EXECUTE, not explain. "
                         "Respond with ONE ```bash``` block for the next concrete "
                         "step (or say BLOCKED in one sentence if you truly cannot)."
+                    )
+                elif _looks_like_cat_prose:
+                    _nudge = (
+                        "You wrote prose shell commands (`cat ...`) — those do NOT "
+                        "run in chat. Use ```grep``` / ```read_file``` / ```glob``` "
+                        "tool blocks. If CODE SEARCH was injected above, answer from "
+                        "those file paths with evidence — do not invent missing files."
                     )
                 messages.append({"role": "system", "content": _nudge})
                 # Visible signal in the stream so the user knows we caught it.

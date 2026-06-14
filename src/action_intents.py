@@ -124,6 +124,14 @@ _ROUTING_PATTERNS: tuple[tuple[str, str, Pattern[str]], ...] = tuple(
         ("workspace", "analyze project", r"\b(?:analyze|analyse|review|explore|inspect|audit|summarize|summarise|explain|describe|understand)\b.{0,80}\b(?:this\s+)?(?:project|codebase|workspace|repo(?:sitory)?|app(?:lication)?|website|site|code|folder|directory|whole\s+workspace)\b"),
         ("workspace", "what is project about", r"\bwhat\s+(?:is|does)\s+(?:this\s+)?(?:project|website|app|codebase|repo|site)\b"),
         ("workspace", "project stack question", r"\bwhat\s+(?:tools|tech(?:nologies)?|stack|frameworks?)\b.{0,60}\b(?:used|built|make|making)\b"),
+        ("workspace", "inspect workspace files", r"\b(?:analyze|analyse|read|look\s+at|check|go\s+through)\b.{0,60}\b(?:files?|folders?|directories)\b"),
+        ("workspace", "workspace has access question", r"\b(?:can|could)\s+you\s+(?:analyze|analyse|read|access|see|inspect)\b.{0,60}\b(?:files?|workspace|project|codebase)\b"),
+
+        # Workspace code location (grep-first — which file handles X).
+        ("workspace", "which file", r"\b(?:which|what)\s+file\b"),
+        ("workspace", "where is code", r"\bwhere\s+(?:is|does|would|can)\b.{0,80}\b(?:file|code|component|handler|page)\b"),
+        ("workspace", "find file in project", r"\b(?:find|locate|figure\s+out)\b.{0,80}\b(?:file|files|component)\b"),
+        ("workspace", "read files to find", r"\bread\s+(?:each\s+)?(?:file|files)\b.{0,80}\b(?:figure|find|which)\b"),
 
         # Workspace file mutations (delete/remove/clear).
         ("workspace", "delete/remove workspace file", rf"{_PLEASE}(?:delete|remove)\s+(?:the\s+)?(?:file\s+)?[\w./~-]+\S*"),
@@ -147,6 +155,12 @@ def classify_tool_intent(text: str) -> ToolIntent:
         if pattern.search(text):
             return ToolIntent(True, category=category, reason=reason)
     return ToolIntent(False, reason="no tool-action pattern matched")
+
+
+def needs_workspace_agent(text: str) -> bool:
+    """True when the message requires workspace file tools (analyze/locate/edit)."""
+    intent = classify_tool_intent(text)
+    return intent.needs_tools and intent.category == "workspace"
 
 
 def message_needs_tools(text: str, patterns: Iterable[Pattern[str]] = _TOOL_INTENT_PATTERNS) -> bool:
