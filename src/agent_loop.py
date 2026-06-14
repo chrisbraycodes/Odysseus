@@ -1623,6 +1623,11 @@ async def stream_agent_loop(
     # the fenced-block path is used instead of native function calling.
     _is_ollama_native = _is_ollama_native_url(endpoint_url or "")
     _ollama_openai_compat = _is_ollama_openai_compat_url(endpoint_url or "")
+    try:
+        from src.model_context import _is_local_endpoint
+        _is_local_endpoint = _is_local_endpoint(endpoint_url or "")
+    except Exception:
+        _is_local_endpoint = False
     if _endpoint_supports is True:
         _is_api_model = True
     elif (
@@ -1630,6 +1635,7 @@ async def stream_agent_loop(
         or _model_no_tools
         or _is_ollama_native
         or _ollama_openai_compat
+        or (_is_local_endpoint and _endpoint_supports is not True)
     ):
         _is_api_model = False
     else:
@@ -1715,18 +1721,30 @@ async def stream_agent_loop(
             messages[0]["content"] = _ws_warn + "\n\n" + (messages[0].get("content") or "")
         else:
             messages.insert(0, {"role": "system", "content": _ws_warn})
-    # User pasted a literal shell command (e.g. "npx create-react-app batman").
-    # Small models answer with tutorials unless we pin execute-now at the top.
+    # Pin a short execute-now note at the top for small models. File-creation
+    # English ("make a txt file…") must beat direct-shell — otherwise `make`
+    # is treated as GNU make(1) and the user's words become build targets.
     try:
         from src.direct_shell import direct_shell_system_note, last_user_message
+        from src.workspace_file_intent import workspace_file_create_system_note
         _user_cmd = last_user_message(messages)
-        _ds_note = direct_shell_system_note(_user_cmd)
-        if _ds_note and "bash" not in (disabled_tools or set()):
-            if messages and messages[0].get("role") == "system":
-                messages[0]["content"] = _ds_note + "\n\n" + (messages[0].get("content") or "")
-            else:
-                messages.insert(0, {"role": "system", "content": _ds_note})
-            logger.info("[direct-shell] pinned execute-now note for: %r", _user_cmd[:80])
+        _exec_note = workspace_file_create_system_note(_user_cmd)
+        _note_kind = "workspace-file-create"
+        if not _exec_note:
+            _exec_note = direct_shell_system_note(_user_cmd)
+            _note_kind = "direct-shell"
+        if _exec_note:
+            _blocked = (
+                "write_file" in (disabled_tools or set())
+                if _note_kind == "workspace-file-create"
+                else "bash" in (disabled_tools or set())
+            )
+            if not _blocked:
+                if messages and messages[0].get("role") == "system":
+                    messages[0]["content"] = _exec_note + "\n\n" + (messages[0].get("content") or "")
+                else:
+                    messages.insert(0, {"role": "system", "content": _exec_note})
+                logger.info("[%s] pinned execute-now note for: %r", _note_kind, _user_cmd[:80])
     except Exception:
         pass
     if plan_mode:
@@ -1879,6 +1897,58 @@ async def stream_agent_loop(
     # Auto-orchestration: run direct shell commands (npm start, pwd, …) and the
     # next unchecked shell step from an approved plan without waiting for a
     # weak model to emit a ```bash block.
+    # Auto-orchestration: run direct shell commands (npm start, pwd, …) and the
+    # next unchecked shell step from an approved plan without waiting for a
+    # weak model to emit a ```bash block.
+    if session_id and "write_file" not in (disabled_tools or set()) and not plan_mode:
+        try:
+            from src.direct_shell import last_user_message
+            from src.workspace_file_orchestration import (
+                format_write_files_sse,
+                run_auto_write_files_if_needed,
+            )
+            _auto_user = last_user_message(messages)
+            _auto_write = await run_auto_write_files_if_needed(
+                user_msg=_auto_user,
+                workspace=workspace,
+                approved_plan=approved_plan or "",
+                session_id=session_id,
+                owner=owner,
+            )
+            if _auto_write:
+                if _auto_write.workspace:
+                    workspace = _auto_write.workspace
+                for chunk in format_write_files_sse(_auto_write):
+                    yield chunk
+                tool_events.extend(_auto_write.tool_events)
+                if _auto_write.skip_llm:
+                    full_response = _auto_write.assistant_message
+                    round_texts = [full_response]
+                    yield f"data: {json.dumps({'delta': full_response})}\n\n"
+                    total_duration = time.time() - total_start
+                    metrics = _compute_final_metrics(
+                        messages, full_response, total_duration, time_to_first_token,
+                        context_length, real_input_tokens, real_output_tokens,
+                        has_real_usage, tool_events, round_texts, model=actual_model,
+                        last_round_input_tokens=last_round_input_tokens,
+                        prep_timings=prep_timings,
+                        backend_gen_tps=backend_gen_tps,
+                        backend_prefill_tps=backend_prefill_tps,
+                    )
+                    metrics["requested_model"] = requested_model
+                    yield f"data: {json.dumps({'type': 'metrics', 'data': metrics})}\n\n"
+                    yield "data: [DONE]\n\n"
+                    return
+                messages.append({
+                    "role": "system",
+                    "content": (
+                        f"{_auto_write.assistant_message}\n\n"
+                        "Continue only if additional steps remain."
+                    ),
+                })
+        except Exception as _auto_write_err:
+            logger.warning("[auto-write-files] skipped: %s", _auto_write_err)
+
     if session_id and "bash" not in (disabled_tools or set()) and not plan_mode:
         try:
             from src.direct_shell import last_user_message

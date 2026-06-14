@@ -851,6 +851,123 @@ def _sanitize_llm_messages(messages: List[Dict]) -> List[Dict]:
 
     return merged
 
+
+def _needs_local_openai_compat_flatten(url: str, provider: str) -> bool:
+    """llama.cpp and similar local OpenAI-compat servers reject tool role / null content."""
+    if provider in ("anthropic", "ollama"):
+        return False
+    try:
+        from src.model_context import _is_local_endpoint
+        return _is_local_endpoint(url)
+    except Exception:
+        return False
+
+
+def _stringify_message_content(content) -> str:
+    """Coerce message content to a plain string for strict local chat APIs."""
+    if content is None:
+        return ""
+    if isinstance(content, list):
+        parts = []
+        for block in content:
+            if isinstance(block, dict) and block.get("type") == "text":
+                parts.append(str(block.get("text") or ""))
+            elif isinstance(block, str):
+                parts.append(block)
+        return "\n".join(p for p in parts if p)
+    return str(content)
+
+
+def _flatten_native_tool_history(messages: List[Dict]) -> List[Dict]:
+    """Convert native tool/tool_calls turns into plain user/assistant text.
+
+    Rust llama-server (OpenAI-compat) only accepts system/user/assistant
+    messages with string content. Prior agent rounds that used native
+    function calling leave role:tool / content:null payloads that trigger
+    HTTP 422 (MessageBody deserialize errors).
+    """
+    out: List[Dict] = []
+    i = 0
+    while i < len(messages or []):
+        msg = messages[i]
+        if not isinstance(msg, dict):
+            i += 1
+            continue
+        role = msg.get("role")
+        if role == "assistant" and msg.get("tool_calls"):
+            parts = []
+            prose = _stringify_message_content(msg.get("content")).strip()
+            if prose:
+                parts.append(prose)
+            names = []
+            for tc in msg.get("tool_calls") or []:
+                if not isinstance(tc, dict):
+                    continue
+                fn = tc.get("function") if isinstance(tc.get("function"), dict) else {}
+                name = (fn.get("name") or tc.get("name") or "tool").strip()
+                if name:
+                    names.append(name)
+            if names:
+                parts.append(f"[Called tools: {', '.join(names)}]")
+            j = i + 1
+            tool_results = []
+            while j < len(messages) and isinstance(messages[j], dict) and messages[j].get("role") == "tool":
+                tool_results.append(_stringify_message_content(messages[j].get("content")))
+                j += 1
+            if parts:
+                out.append({"role": "assistant", "content": "\n".join(parts)})
+            if tool_results:
+                joined = "\n\n".join(r for r in tool_results if r.strip())
+                if joined:
+                    out.append({"role": "user", "content": f"[Tool execution results]\n\n{joined}"})
+            i = j
+            continue
+        if role == "tool":
+            text = _stringify_message_content(msg.get("content")).strip()
+            if text:
+                out.append({"role": "user", "content": f"[Tool result]\n\n{text}"})
+            i += 1
+            continue
+        if role not in ("system", "user", "assistant"):
+            i += 1
+            continue
+        text = _stringify_message_content(msg.get("content"))
+        if role == "assistant" and not text.strip():
+            i += 1
+            continue
+        if role == "system" or text.strip() or role == "user":
+            out.append({"role": role, "content": text})
+        i += 1
+    return out
+
+
+def _prepare_openai_compat_messages(
+    messages: List[Dict], url: str, provider: str,
+) -> List[Dict]:
+    """Sanitize, merge system messages, and apply local-server compat."""
+    messages_copy = _sanitize_llm_messages(messages)
+    sys_parts = []
+    non_sys = []
+    for m in messages_copy:
+        if m.get("role") == "system":
+            sys_parts.append(m.get("content") or "")
+        else:
+            non_sys.append(m)
+    if sys_parts:
+        merged_sys = []
+        for part in sys_parts:
+            if isinstance(part, list):
+                merged_sys.append(_stringify_message_content(part))
+            else:
+                merged_sys.append(str(part or ""))
+        messages_copy = [{"role": "system", "content": "\n\n".join(merged_sys)}] + non_sys
+    else:
+        messages_copy = non_sys
+    if _needs_local_openai_compat_flatten(url, provider):
+        messages_copy = _flatten_native_tool_history(messages_copy)
+    return messages_copy
+
+
 def _normalize_anthropic_url(url: str) -> str:
     """Ensure Anthropic URL points to /v1/messages."""
     url = url.rstrip("/")
@@ -991,22 +1108,8 @@ def llm_call(url: str, model: str, messages: List[Dict], temperature: float = LL
     if isinstance(headers, dict):
         h.update(headers)
 
-    messages_copy = _sanitize_llm_messages(messages)
-
-    # Consolidate multiple system messages into one at the start.
-    sys_parts = []
-    non_sys = []
-    for m in messages_copy:
-        if m.get("role") == "system":
-            sys_parts.append(m.get('content') or '')
-        else:
-            non_sys.append(m)
-    if sys_parts:
-        messages_copy = [{"role": "system", "content": "\n\n".join(sys_parts)}] + non_sys
-    else:
-        messages_copy = non_sys
-
     provider = _detect_provider(url)
+    messages_copy = _prepare_openai_compat_messages(messages, url, provider)
     cache_key = _get_cache_key(url, model, messages_copy, temperature, max_tokens)
     cached_response = _get_cached_response(cache_key)
     if cached_response:
@@ -1138,20 +1241,7 @@ async def llm_call_async(
 ) -> str:
     """Asynchronous LLM call using httpx with connection pooling, timeout, retry logic, and performance logging."""
     provider = _detect_provider(url)
-    messages_copy = _sanitize_llm_messages(messages)
-
-    # Consolidate multiple system messages into one at the start.
-    sys_parts = []
-    non_sys = []
-    for m in messages_copy:
-        if m.get("role") == "system":
-            sys_parts.append(m.get('content') or '')
-        else:
-            non_sys.append(m)
-    if sys_parts:
-        messages_copy = [{"role": "system", "content": "\n\n".join(sys_parts)}] + non_sys
-    else:
-        messages_copy = non_sys
+    messages_copy = _prepare_openai_compat_messages(messages, url, provider)
 
     cache_key = _get_cache_key(url, model, messages_copy, temperature, max_tokens)
     cached_response = _get_cached_response(cache_key)
@@ -1255,21 +1345,7 @@ async def stream_llm(url: str, model: str, messages: List[Dict], temperature: fl
       - data: [DONE]                       — end of stream
     """
     provider = _detect_provider(url)
-    messages_copy = _sanitize_llm_messages(messages)
-
-    # Consolidate multiple system messages into one at the start.
-    # Some models (e.g. Qwen3.5) reject system messages that aren't first.
-    sys_parts = []
-    non_sys = []
-    for m in messages_copy:
-        if m.get("role") == "system":
-            sys_parts.append(m.get('content') or '')
-        else:
-            non_sys.append(m)
-    if sys_parts:
-        messages_copy = [{"role": "system", "content": "\n\n".join(sys_parts)}] + non_sys
-    else:
-        messages_copy = non_sys
+    messages_copy = _prepare_openai_compat_messages(messages, url, provider)
 
     if provider == "anthropic":
         target_url = _normalize_anthropic_url(url)

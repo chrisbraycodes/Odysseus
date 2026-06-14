@@ -114,6 +114,12 @@ _ROUTING_PATTERNS: tuple[tuple[str, str, Pattern[str]], ...] = tuple(
         ("shell", "direct create-react-app command", r"^\s*create-react-app\s+\S+"),
         ("shell", "system/file check request", r"\b(check|see)\s+(if|whether|what)\s+.{1,40}\b(running|process|service|port|file|exists?)\b"),
 
+        # Workspace file creation (English phrasing — not GNU make / bash).
+        ("workspace", "create workspace file", rf"{_PLEASE}(?:make|create|write|save|add|generate)\s+(?:a\s+|an\s+|the\s+|some\s+|my\s+)?(?:\w+\s+){{0,5}}(?:txt|text\s+file|file|files|document|documents)\b"),
+        ("workspace", "name workspace file", r"\bname\s+(?:it|them|each)\s+\S+"),
+        ("workspace", "numbered workspace files", r"\b(?:increment(?:ing)?|counting)\s+(?:up\s+)?(?:to|through)\s+\d+\b"),
+        ("workspace", "save created files", r"\bsave\s+them\b"),
+
         # Workspace file mutations (delete/remove/clear).
         ("workspace", "delete/remove workspace file", rf"{_PLEASE}(?:delete|remove)\s+(?:the\s+)?(?:file\s+)?[\w./~-]+\S*"),
         ("workspace", "delete all in folder", rf"{_PLEASE}delete\s+all\b"),

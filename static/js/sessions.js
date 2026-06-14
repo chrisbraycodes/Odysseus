@@ -9,6 +9,8 @@ import { providerLogo } from './providers.js';
 import { initModelPicker, updateModelPicker } from './modelPicker.js';
 import themeModule from './theme.js';
 import spinnerModule from './spinner.js';
+import { getWorkspace } from './workspace.js';
+import * as workspaceSessions from './workspaceSessions.js';
 
 const API_BASE = window.location.origin;
 
@@ -35,6 +37,100 @@ function _markIncognito(sid) {
   if (!ids.includes(sid)) { ids.push(sid); sessionStorage.setItem(_INCOGNITO_SESSIONS_KEY, JSON.stringify(ids)); }
 }
 function _isIncognitoSession(sid) { return _getIncognitoIds().includes(sid); }
+
+function _isTransientSessionMeta(s) {
+  return !!s && (s.folder === 'Assistant' || s.folder === 'Tasks');
+}
+
+function _workspaceSessionCtx() {
+  return {
+    sessions,
+    isIncognito: _isIncognitoSession,
+    isTransient: _isTransientSessionMeta,
+  };
+}
+
+function _syncWorkspaceSessionBinding() {
+  const ws = getWorkspace();
+  if (!ws || !currentSessionId) return;
+  workspaceSessions.bindSessionToWorkspace(ws, currentSessionId, _workspaceSessionCtx());
+}
+
+let _workspaceSwitchBusy = false;
+let _workspaceBindingInit = false;
+
+async function _activateChatForWorkspace(workspacePath) {
+  const restoredId = workspacePath
+    ? workspaceSessions.resolveRestorableSessionForWorkspace(
+      workspacePath, sessions, _workspaceSessionCtx()
+    )
+    : null;
+  if (restoredId) {
+    _pendingChat = null;
+    _skipAutoSelect = true;
+    await selectSession(restoredId, { keepSidebar: true });
+    return;
+  }
+  await createDirectChatFromPreferredModel();
+}
+
+async function _handleWorkspaceChangedForSessions(e) {
+  const detail = e?.detail || {};
+  if (detail.resync) return;
+
+  const prevPath = (detail.previous || '').trim();
+  const newPath = (detail.path || '').trim();
+  if (prevPath === newPath) return;
+
+  if (_workspaceSwitchBusy) return;
+  _workspaceSwitchBusy = true;
+  try {
+    if (prevPath) {
+      workspaceSessions.bindSessionToWorkspace(
+        prevPath, currentSessionId, _workspaceSessionCtx()
+      );
+    }
+    await _activateChatForWorkspace(newPath);
+  } finally {
+    _workspaceSwitchBusy = false;
+  }
+}
+
+export function initWorkspaceSessionBinding() {
+  if (_workspaceBindingInit) return;
+  _workspaceBindingInit = true;
+  document.addEventListener('workspace-changed', _handleWorkspaceChangedForSessions);
+}
+
+export async function createDirectChatFromPreferredModel() {
+  if (_pendingChat?.url && _pendingChat?.modelId) {
+    createDirectChat(_pendingChat.url, _pendingChat.modelId, _pendingChat.endpointId);
+    return true;
+  }
+
+  const current = sessions.find((s) => s.id === currentSessionId);
+  if (current?.endpoint_url && current?.model) {
+    createDirectChat(current.endpoint_url, current.model, current.endpoint_id);
+    return true;
+  }
+
+  try {
+    const dcRes = await fetch(`${API_BASE}/api/default-chat`);
+    const dc = await dcRes.json();
+    if (dc.endpoint_url && dc.model) {
+      createDirectChat(dc.endpoint_url, dc.model, dc.endpoint_id);
+      return true;
+    }
+  } catch (_) {}
+
+  const withModel = sessions.filter((s) => s.endpoint_url && s.model);
+  if (withModel.length > 0) {
+    const last = withModel[0];
+    createDirectChat(last.endpoint_url, last.model, last.endpoint_id);
+    return true;
+  }
+  return false;
+}
 async function _cleanupIncognitoSessions() {
   const ids = _getIncognitoIds();
   if (ids.length === 0) return;
@@ -81,6 +177,7 @@ function _deselectCurrentSession(sid) {
 function _removeSessionFromLocalState(sid) {
   if (!sid) return;
   const id = String(sid);
+  workspaceSessions.unlinkSessionId(id);
   sessions = sessions.filter(s => String(s.id) !== id);
   _selectedIds.delete(id);
   try {
@@ -1399,16 +1496,25 @@ export async function loadSessions() {
     } else if (currentSessionId) {
       // Session was just created but may not be in the list yet — keep it
       targetId = currentSessionId;
-    } else if (savedId && activeSessions.some(s => s.id === savedId)) {
-      targetId = savedId;
-    } else if (!_skipAutoSelect && _realSessions.length > 0) {
-      // Most-recent NON-transient session — skip Assistant / Tasks so the
-      // auto-firing assistant doesn't become the apparent default chat.
-      targetId = _realSessions[0].id;
-    } else if (!_skipAutoSelect && activeSessions.length > 0) {
-      // Only transient sessions exist (brand-new account) — fall through to
-      // the original behaviour so we don't leave the user with nothing.
-      targetId = activeSessions[0].id;
+    } else {
+      const wsPath = getWorkspace();
+      if (wsPath) {
+        targetId = workspaceSessions.resolveRestorableSessionForWorkspace(
+          wsPath, activeSessions, _workspaceSessionCtx()
+        );
+      }
+      if (!targetId && savedId && activeSessions.some(s => s.id === savedId)) {
+        targetId = savedId;
+      }
+      if (!targetId && !_skipAutoSelect && _realSessions.length > 0) {
+        // Most-recent NON-transient session — skip Assistant / Tasks so the
+        // auto-firing assistant doesn't become the apparent default chat.
+        targetId = _realSessions[0].id;
+      } else if (!targetId && !_skipAutoSelect && activeSessions.length > 0) {
+        // Only transient sessions exist (brand-new account) — fall through to
+        // the original behaviour so we don't leave the user with nothing.
+        targetId = activeSessions[0].id;
+      }
     }
     _skipAutoSelect = false;
 
@@ -1517,6 +1623,7 @@ export async function selectSession(id, { keepSidebar = false } = {}) {
       if (window.location.hash !== '#' + id) {
         history.replaceState(null, '', '#' + id);
       }
+      _syncWorkspaceSessionBinding();
     }
     // Restore character preset for persistent chats
     try {
@@ -1870,6 +1977,7 @@ export async function materializePendingSession() {
   currentSessionId = payload.id;
   Storage.set('lastSessionId', payload.id);
   history.replaceState(null, '', '#' + payload.id);
+  _syncWorkspaceSessionBinding();
 
   // Reload sidebar to show the new session — await it so the session
   // is fully registered before the caller proceeds (prevents race conditions)
@@ -3099,10 +3207,12 @@ export function setSessionHasDocs(sessionId, hasDocs) {
 // Export all functions to window for use in main app
 const sessionModule = {
   initDependencies,
+  initWorkspaceSessionBinding,
   renderSessionList,
   loadSessions,
   selectSession,
   createDirectChat,
+  createDirectChatFromPreferredModel,
   materializePendingSession,
   hasPendingChat,
   getPendingChat,
@@ -3129,5 +3239,7 @@ const sessionModule = {
 };
 
 export { updateModelPicker };
+
+initWorkspaceSessionBinding();
 
 export default sessionModule;

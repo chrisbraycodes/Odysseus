@@ -17,6 +17,23 @@ _DIRECT_CMD = re.compile(
     re.I,
 )
 
+# English "make a txt file…", not GNU make(1) building a target.
+_ENGLISH_MAKE_PHRASE = re.compile(
+    r"^\s*make\s+(?:"
+    r"(?:a|an|the|my|some|another|new)\s+(?:\w+\s+){0,6}"
+    r"(?:file|files|txt|text\s+file|document|folder|directory|note|script|project|app|copy|backup)\b"
+    r"|(?:me\s+)?(?:a\s+|an\s+)?(?:file|files|txt|text\s+file)\b"
+    r")",
+    re.I,
+)
+
+
+def is_english_make_phrase(text: str) -> bool:
+    """True when 'make' means create/produce, not the make(1) build tool."""
+    line = (text or "").strip().splitlines()
+    line = next((ln.strip() for ln in line if ln.strip()), "")
+    return bool(line and _ENGLISH_MAKE_PHRASE.match(line))
+
 
 def is_direct_shell_command(text: str) -> bool:
     """True when the user sent one line that looks like a shell command."""
@@ -24,6 +41,8 @@ def is_direct_shell_command(text: str) -> bool:
         return False
     lines = [ln.strip() for ln in text.strip().splitlines() if ln.strip()]
     if len(lines) != 1:
+        return False
+    if is_english_make_phrase(lines[0]):
         return False
     if _DIRECT_CMD.match(lines[0]):
         return True

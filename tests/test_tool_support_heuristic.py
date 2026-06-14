@@ -27,6 +27,12 @@ def _compute_is_api_model(model: str, endpoint_url: str, endpoint_supports=None)
         "deepseek-r1",
     ))
 
+    try:
+        from src.model_context import _is_local_endpoint
+        is_local = _is_local_endpoint(endpoint_url or "")
+    except Exception:
+        is_local = False
+
     if endpoint_supports is True:
         return True
     if (
@@ -34,6 +40,7 @@ def _compute_is_api_model(model: str, endpoint_url: str, endpoint_supports=None)
         or model_no_tools
         or _is_ollama_native_url(endpoint_url)
         or _is_ollama_openai_compat_url(endpoint_url)
+        or (is_local and endpoint_supports is not True)
     ):
         return False
     return any(h in endpoint_url for h in _API_HOSTS) or model_supports_tools
@@ -126,11 +133,16 @@ class TestDeepSeekToolSupport:
 
     # --- other local models unaffected ---
 
-    def test_qwen_local_non_ollama_still_gets_tools(self):
-        assert _compute_is_api_model("qwen2.5:14b", "http://localhost:8000/v1") is True
+    def test_qwen_local_non_ollama_defaults_to_fenced_tools(self):
+        assert _compute_is_api_model("qwen2.5:14b", "http://localhost:8000/v1") is False
 
-    def test_llama_local_non_ollama_gets_tools_via_host(self):
-        assert _compute_is_api_model("llama3.2:3b", "http://localhost:8000/v1") is True
+    def test_qwen_local_non_ollama_gets_tools_when_endpoint_opt_in(self):
+        assert _compute_is_api_model(
+            "qwen2.5:14b", "http://localhost:8000/v1", endpoint_supports=True
+        ) is True
+
+    def test_llama_local_non_ollama_defaults_to_fenced_tools(self):
+        assert _compute_is_api_model("llama3.2:3b", "http://localhost:8000/v1") is False
 
 
 class TestApiHostsContainsDeepSeek:

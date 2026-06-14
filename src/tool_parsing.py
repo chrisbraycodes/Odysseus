@@ -280,6 +280,23 @@ def _parse_misfenced_web_lookup(content: str) -> Optional[ToolBlock]:
     return ToolBlock("web_fetch", url)
 
 
+_INLINE_WRITE_FILE_RE = re.compile(
+    r"(?:^|\n)\s*(?:[-*]\s*)?write_file\s+file=(\S+)\s+content=(.+?)\s*$",
+    re.I | re.M,
+)
+
+
+def _parse_inline_write_file_lines(text: str) -> List[ToolBlock]:
+    """Recover write_file calls written as prose (common with small local models)."""
+    blocks: List[ToolBlock] = []
+    for m in _INLINE_WRITE_FILE_RE.finditer(text or ""):
+        path = (m.group(1) or "").strip().strip("'\"")
+        body = (m.group(2) or "").strip().strip("'\"")
+        if path:
+            blocks.append(ToolBlock("write_file", f"{path}\n{body}"))
+    return blocks
+
+
 def _parse_misfenced_update_plan(content: str) -> Optional[ToolBlock]:
     """Recover update_plan calls wrapped in ```python fences.
 
@@ -508,6 +525,9 @@ def parse_tool_blocks(text: str) -> List[ToolBlock]:
                 blocks.append(block)
                 continue
         blocks.append(ToolBlock(tag, content))
+
+    # Pattern 1b: prose write_file lines (- write_file file=1.txt content=1)
+    blocks.extend(_parse_inline_write_file_lines(text))
 
     # Pattern 2: [TOOL_CALL] blocks (only if no fenced blocks found)
     if not blocks:

@@ -82,34 +82,9 @@ _refreshDefaultChat();
 
 async function _createDirectChatFromPreferredModel() {
   if (!sessionModule) return false;
-
-  const pending = sessionModule.getPendingChat && sessionModule.getPendingChat();
-  if (pending && pending.url && pending.modelId) {
-    sessionModule.createDirectChat(pending.url, pending.modelId, pending.endpointId);
-    return true;
+  if (sessionModule.createDirectChatFromPreferredModel) {
+    return sessionModule.createDirectChatFromPreferredModel();
   }
-
-  const sessions = sessionModule.getSessions();
-  const currentId = sessionModule.getCurrentSessionId();
-  const current = sessions.find(s => s.id === currentId);
-  if (current && current.endpoint_url && current.model) {
-    sessionModule.createDirectChat(current.endpoint_url, current.model, current.endpoint_id);
-    return true;
-  }
-
-  const dc = await _refreshDefaultChat();
-  if (dc) {
-    sessionModule.createDirectChat(dc.endpoint_url, dc.model, dc.endpoint_id);
-    return true;
-  }
-
-  const withModel = sessions.filter(s => s.endpoint_url && s.model);
-  if (withModel.length > 0) {
-    const last = withModel[0]; // sessions are sorted by recent
-    sessionModule.createDirectChat(last.endpoint_url, last.model, last.endpoint_id);
-    return true;
-  }
-
   return false;
 }
 

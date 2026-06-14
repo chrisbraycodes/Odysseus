@@ -782,6 +782,7 @@ async def _direct_fallback(
         if tool == "bash":
             from src.plan_execution import resolve_scaffold_cwd
             from src.workspace_dev import host_dev_server_message
+            from src.workspace_file_orchestration import is_bash_file_creation_attempt
 
             if content.startswith("#@host-dev@#"):
                 host_cmd = content.split("\n", 1)[-1].strip()
@@ -789,8 +790,24 @@ async def _direct_fallback(
                     "output": host_dev_server_message(workspace, host_cmd),
                     "exit_code": 0,
                 }
+            if is_bash_file_creation_attempt(content):
+                return {
+                    "error": (
+                        "bash cannot create workspace files here (shell loops/redirects are blocked). "
+                        "Use ```write_file``` — one fenced block per file: path on line 1, content below."
+                    ),
+                    "exit_code": 1,
+                }
             cwd = resolve_scaffold_cwd(workspace, workspace or _default_agent_cwd())
-            proc = await asyncio.create_subprocess_shell(
+            bash_bin = os.environ.get("SHELL") or "/bin/bash"
+            if os.name != "nt":
+                for candidate in ("/bin/bash", "/usr/bin/bash", bash_bin):
+                    if candidate and os.path.isfile(candidate):
+                        bash_bin = candidate
+                        break
+            proc = await asyncio.create_subprocess_exec(
+                bash_bin,
+                "-lc",
                 content,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
