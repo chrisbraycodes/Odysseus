@@ -12437,6 +12437,7 @@ mark.doc-find-mark.current {
   z-index: 1;
   background: transparent !important;
   color: transparent !important;
+  -webkit-text-fill-color: transparent !important;
   color-scheme: dark;
   caret-color: var(--fg);
   border: none;
@@ -12493,13 +12494,21 @@ mark.doc-find-mark.current {
 .doc-editor-textarea:focus,
 .doc-editor-textarea:active {
   background: transparent !important;
-  /* Used to force `color: transparent` here so the hidden two-layer
-     textarea wouldn't bleed through on hover/focus. Now that the
-     textarea renders its OWN visible text (overlay is hidden), forcing
-     transparent here makes typed text disappear the moment the cursor
-     enters the page. Keep the visible fg color instead. */
-  color: var(--fg) !important;
   outline: none !important;
+}
+/* Code editor: keep typed text invisible so the hljs overlay shows through. */
+.doc-editor-textarea:not(.email-mode):hover,
+.doc-editor-textarea:not(.email-mode):focus,
+.doc-editor-textarea:not(.email-mode):active {
+  color: transparent !important;
+  -webkit-text-fill-color: transparent !important;
+}
+/* Email compose: single visible text layer (no syntax overlay). */
+.doc-editor-textarea.email-mode:hover,
+.doc-editor-textarea.email-mode:focus,
+.doc-editor-textarea.email-mode:active {
+  color: var(--fg) !important;
+  -webkit-text-fill-color: currentColor !important;
 }
 .doc-editor-textarea::placeholder {
   color: var(--fg);
@@ -28702,19 +28711,15 @@ button .spinner-whirlpool {
   font-variant-emoji: emoji;
 }
 
-/* Single-layer rendering for ALL documents (not just email): the highlight
-   overlay (<pre> with hljs spans) and the transparent textarea use two
-   different rendering paths internally — the textarea uses the browser's
-   native form line-breaker, the overlay uses CSS line-breaking — and they
-   can never be guaranteed to wrap byte-identical no matter how many CSS
-   properties are pinned. Pick one source of truth: make the textarea its
-   own visible text, hide the overlay. Trade-off: no syntax highlighting in
-   the live editor (rendered markdown preview / chat output still has it).
-   The caret is now glued to the typed text by definition since both are
-   rendered by the same element. */
-.doc-editor-highlight,
-#doc-editor-code.email-mode .doc-editor-highlight {
+/* Code editor: colored hljs overlay behind a transparent textarea.
+   Email compose keeps a single visible text layer instead — see .email-mode. */
+.doc-editor-highlight.email-mode {
   display: none !important;
+}
+.doc-editor-textarea.email-mode {
+  color: var(--fg) !important;
+  -webkit-text-fill-color: currentColor !important;
+  caret-color: var(--fg) !important;
 }
 /* Find bar is open: float the highlight overlay ON TOP of the
    textarea with transparent background + transparent text, so only
@@ -28743,12 +28748,40 @@ body.doc-find-active mark.doc-find-mark.current {
   box-shadow: 0 0 0 2px var(--fg) !important;
   outline: 1px solid var(--fg) !important;
 }
-.doc-editor-textarea,
-#doc-editor-code.email-mode .doc-editor-textarea {
-  color: var(--fg) !important;
-  caret-color: var(--fg) !important;
-  z-index: 1;
-}
+
+/* Syntax token colors inside the live editor overlay (scoped for specificity). */
+.doc-editor-highlight:not(.email-mode) .hljs-keyword,
+.doc-editor-highlight:not(.email-mode) .hljs-selector-tag { color: var(--hl-keyword); }
+.doc-editor-highlight:not(.email-mode) .hljs-string,
+.doc-editor-highlight:not(.email-mode) .hljs-regexp,
+.doc-editor-highlight:not(.email-mode) .hljs-addition { color: var(--hl-string); }
+.doc-editor-highlight:not(.email-mode) .hljs-comment,
+.doc-editor-highlight:not(.email-mode) .hljs-quote,
+.doc-editor-highlight:not(.email-mode) .hljs-meta { color: var(--hl-comment); }
+.doc-editor-highlight:not(.email-mode) .hljs-function,
+.doc-editor-highlight:not(.email-mode) .hljs-title,
+.doc-editor-highlight:not(.email-mode) .hljs-title.function_,
+.doc-editor-highlight:not(.email-mode) .hljs-section { color: var(--hl-function); }
+.doc-editor-highlight:not(.email-mode) .hljs-number,
+.doc-editor-highlight:not(.email-mode) .hljs-literal { color: var(--hl-number, var(--hl-string)); }
+.doc-editor-highlight:not(.email-mode) .hljs-built_in,
+.doc-editor-highlight:not(.email-mode) .hljs-type,
+.doc-editor-highlight:not(.email-mode) .hljs-class,
+.doc-editor-highlight:not(.email-mode) .hljs-title.class_ { color: var(--hl-builtin, var(--hl-function)); }
+.doc-editor-highlight:not(.email-mode) .hljs-variable,
+.doc-editor-highlight:not(.email-mode) .hljs-template-variable,
+.doc-editor-highlight:not(.email-mode) .hljs-attr { color: var(--hl-variable, var(--hl-fg, var(--fg))); }
+.doc-editor-highlight:not(.email-mode) .hljs-operator,
+.doc-editor-highlight:not(.email-mode) .hljs-punctuation { color: var(--hl-fg, var(--fg)); opacity: 0.8; }
+.doc-editor-highlight:not(.email-mode) .hljs-params { color: var(--hl-params, var(--hl-fg, var(--fg))); }
+.doc-editor-highlight:not(.email-mode) .hljs-property,
+.doc-editor-highlight:not(.email-mode) .hljs-selector-class,
+.doc-editor-highlight:not(.email-mode) .hljs-selector-id { color: var(--hl-variable, var(--hl-function)); }
+.doc-editor-highlight:not(.email-mode) .hljs-tag,
+.doc-editor-highlight:not(.email-mode) .hljs-name { color: var(--hl-keyword); }
+.doc-editor-highlight:not(.email-mode) .hljs-symbol { color: var(--hl-string); }
+.doc-editor-highlight:not(.email-mode) .hljs-link { color: var(--hl-function); text-decoration: underline; }
+.doc-editor-highlight:not(.email-mode) .hljs-deletion { color: var(--red); }
 
 /* Emoji picker (monochrome icon picker) */
 .emoji-picker-btn {
@@ -36516,6 +36549,18 @@ body.ws-explorer-view #doc-actions-footer .prometheus-source-label {
 body.ws-explorer-view #doc-actions-footer .email-send-split {
   margin-left: 0;
 }
+body.ws-explorer-view #doc-actions-footer #doc-save-split .email-send-btn {
+  background: color-mix(in srgb, var(--prometheus-green, var(--green, #50fa7b)) 18%, transparent);
+  color: var(--prometheus-green, var(--green, #50fa7b));
+  border-color: color-mix(in srgb, var(--prometheus-green, var(--green, #50fa7b)) 45%, transparent);
+}
+body.ws-explorer-view #doc-actions-footer #doc-save-split .email-send-btn:hover {
+  background: color-mix(in srgb, var(--prometheus-green, var(--green, #50fa7b)) 28%, transparent);
+  border-color: var(--prometheus-green, var(--green, #50fa7b));
+}
+body.ws-explorer-view #doc-actions-footer #doc-save-split .email-send-caret {
+  border-left-color: color-mix(in srgb, var(--prometheus-green, var(--green, #50fa7b)) 45%, transparent);
+}
 body.ws-explorer-view #doc-actions-footer .email-send-btn {
   background: color-mix(in srgb, var(--prometheus-green, var(--green, #50fa7b)) 18%, transparent);
   color: var(--prometheus-green, var(--green, #50fa7b));
@@ -36537,7 +36582,8 @@ body.ws-explorer-view .ws-explorer-section-label {
   opacity: 1;
 }
 
-/* ---- Workspace project explorer (file tree + editor) ---- */
+/* ---- Workspace project explorer (file tree + editor) — desktop IDE only ---- */
+@media (min-width: 769px) {
 body.ws-explorer-view .ws-explorer-pane {
   flex: 0 0 var(--ws-files-width, min(340px, 42vw));
   min-width: 200px;
@@ -36567,6 +36613,7 @@ body.ws-explorer-view .ws-workbench-column {
 }
 body.ws-explorer-view .ws-terminal-dock {
   flex: 0 0 var(--ws-terminal-height, min(280px, 32vh));
+  flex-shrink: 0;
   min-height: 120px;
   max-height: 60vh;
   display: flex;
@@ -36574,6 +36621,7 @@ body.ws-explorer-view .ws-terminal-dock {
   border-top: 1px solid var(--border);
   background: var(--panel, var(--bg));
   overflow: hidden;
+  visibility: visible;
 }
 body.ws-explorer-view .ws-terminal-dock-header {
   flex-shrink: 0;
@@ -36600,10 +36648,13 @@ body.ws-explorer-view .ws-terminal-dock-hint {
 /* Unified editor: project files + documents share doc-editor-pane */
 body.ws-explorer-view.doc-view .doc-editor-pane,
 body.ws-explorer-view .ws-workbench-column .doc-editor-pane {
-  flex: 1 1 0;
+  flex: 1 1 0 !important;
   min-width: 0;
-  min-height: 0;
-  max-width: none;
+  min-height: 0 !important;
+  height: unset !important;
+  max-width: none !important;
+  max-height: none !important;
+  width: auto !important;
   order: unset;
   border-left: none;
   border-right: 1px solid var(--border);
@@ -36686,6 +36737,11 @@ body.ws-explorer-view .ws-ide-split:hover .ws-ide-split-grip,
 body.ws-explorer-view .ws-ide-split.ws-ide-split-dragging .ws-ide-split-grip {
   background: var(--accent, var(--red));
 }
+body.ws-explorer-view .ws-terminal-dock .ws-terminal-mount {
+  flex: 1;
+  min-height: 0;
+}
+}
 .ws-explorer-header {
   display: flex;
   align-items: center;
@@ -36711,6 +36767,115 @@ body.ws-explorer-view .ws-ide-split.ws-ide-split-dragging .ws-ide-split-grip {
 }
 .ws-explorer-btn:disabled { opacity: 0.45; cursor: default; }
 .ws-save-btn { font-weight: 600; color: var(--brand-color, var(--red)); }
+.doc-email-save-draft-btn {
+  opacity: 0.9;
+}
+.doc-email-save-draft-btn:hover {
+  opacity: 1;
+}
+#doc-actions-footer #doc-save-split {
+  margin-right: 8px;
+  margin-left: auto;
+  position: relative;
+}
+body.ws-explorer-view #doc-actions-footer #doc-save-split {
+  margin-left: 0;
+}
+body.ws-explorer-view #doc-actions-footer .prometheus-source-label {
+  margin-left: auto;
+}
+.doc-save-menu {
+  min-width: 280px;
+  max-width: min(360px, 92vw);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.35);
+  padding: 0;
+  overflow: hidden;
+}
+.doc-save-menu-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+  font-size: 11px;
+  font-weight: 600;
+}
+.doc-save-menu-close {
+  background: none;
+  border: none;
+  color: var(--fg);
+  opacity: 0.5;
+  cursor: pointer;
+  font-size: 16px;
+  line-height: 1;
+  padding: 0 4px;
+}
+.doc-save-menu-close:hover { opacity: 1; }
+.doc-save-menu-path {
+  padding: 6px 10px;
+  font-size: 10px;
+  opacity: 0.65;
+  font-family: ui-monospace, monospace;
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.doc-save-menu-list {
+  max-height: min(240px, 40vh);
+  overflow-y: auto;
+  padding: 4px;
+}
+.doc-save-menu-row {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 6px 8px;
+  border: none;
+  border-radius: 4px;
+  background: none;
+  color: var(--fg);
+  font-size: 11px;
+  cursor: pointer;
+  font-family: inherit;
+}
+.doc-save-menu-row:hover {
+  background: color-mix(in srgb, var(--fg) 8%, transparent);
+}
+.doc-save-menu-empty,
+.doc-save-menu-loading,
+.doc-save-menu-error {
+  padding: 10px;
+  font-size: 11px;
+  opacity: 0.7;
+}
+.doc-save-menu-error { color: var(--red); opacity: 1; }
+.doc-save-menu-footer {
+  display: flex;
+  gap: 6px;
+  padding: 8px;
+  border-top: 1px solid var(--border);
+  align-items: center;
+}
+.doc-save-menu-filename {
+  flex: 1;
+  min-width: 0;
+  font-size: 11px;
+  padding: 6px 8px;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  background: var(--panel, var(--bg));
+  color: var(--fg);
+  font-family: ui-monospace, monospace;
+}
+.doc-save-menu-confirm {
+  flex-shrink: 0;
+  font-size: 11px;
+  padding: 6px 10px;
+}
 .ws-explorer-workspace {
   font-size: 11px;
   opacity: 0.65;
@@ -36743,10 +36908,6 @@ body.ws-explorer-view .ws-explorer-tree-section {
   flex: 1 1 40%;
   display: flex;
   flex-direction: column;
-}
-body.ws-explorer-view .ws-terminal-dock .ws-terminal-mount {
-  flex: 1;
-  min-height: 0;
 }
 .ws-terminal-mount {
   flex: 1;
@@ -37009,17 +37170,5 @@ body.ws-explorer-view .ws-terminal-dock .ws-terminal-mount {
   min-height: 80px;
 }
 .ws-terminal-idle-title { font-size: 12px; font-weight: 600; margin-bottom: 4px; }
-.ws-terminal-idle-hint { font-size: 11px; line-height: 1.4; max-width: 240px; }
-@media (max-width: 768px) {
-  body.ws-explorer-view .ws-explorer-pane {
-    position: fixed !important;
-    inset: 0 !important;
-    max-width: 100% !important;
-    width: 100% !important;
-    flex: none !important;
-    z-index: 175;
-    grid-template-rows: auto auto 1fr auto;
-  }
-  body.ws-explorer-view .ws-workbench-column { display: none; }
-  body.ws-explorer-view .chat-container { display: none; }
-}
+.ws-terminal-idle-hint { font-size: 11px; line-height: 1.4; max-width: 280px; }
+.ws-terminal-idle .ws-terminal-pick-btn { margin-top: 10px; }

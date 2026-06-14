@@ -1,30 +1,93 @@
 // static/js/workspace.js
 //
-// Workspace picker: browse server directories in a draggable modal, choose a
-// folder, and show it as a removable pill in the chat input bar. While set, the
-// chat request sends `workspace` so the agent's file/shell tools are confined
-// to that folder (see routes/chat_routes.py + src/tool_execution.py).
+// Workspace picker + single verified workspace record shared by chat, project
+// files, and terminal. The server-validated path is persisted in localStorage
+// (KEYS.WORKSPACE + KEYS.WORKSPACE_VERIFIED) and mirrored in memory after bootstrap.
 
 import Storage, { KEYS } from './storage.js';
 import uiModule from './ui.js';
 import { makeWindowDraggable } from './windowDrag.js';
 
 const API_BASE = window.location.origin;
-// Same folder glyph as the overflow menu item + pill (not an emoji).
+export const WORKSPACE_VERIFIED_EVENT = 'workspace-verified';
+
 const _FOLDER_SVG = '<svg class="workspace-row-icon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>';
+
 let _modal = null;
 let _curPath = '';
 let _dockerWorkspace = false;
 let _readyPromise = null;
 let _defaultRoot = '';
+/** @type {{ path: string, displayPath: string, hostPath: string, verified: boolean } | null} */
+let _verified = null;
 
 function _esc(s) {
   return uiModule.esc ? uiModule.esc(s) : String(s).replace(/[&<>"']/g, (c) =>
     ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
 
+function _loadVerifiedFromStorage() {
+  if (_verified?.path) return _verified;
+  const rec = Storage.getJSON(KEYS.WORKSPACE_VERIFIED, null);
+  if (rec?.path) {
+    _verified = {
+      path: String(rec.path),
+      displayPath: String(rec.displayPath || rec.path),
+      hostPath: String(rec.hostPath || ''),
+      verified: rec.verified !== false,
+    };
+    if (!Storage.get(KEYS.WORKSPACE, '')) {
+      Storage.set(KEYS.WORKSPACE, _verified.path);
+    }
+    return _verified;
+  }
+  const legacy = Storage.get(KEYS.WORKSPACE, '');
+  if (legacy) {
+    _verified = {
+      path: legacy,
+      displayPath: legacy,
+      hostPath: '',
+      verified: false,
+    };
+  }
+  return _verified;
+}
+
+function _persistVerified({ path, displayPath = '', hostPath = '', verified = true }) {
+  if (!path) {
+    _verified = null;
+    Storage.remove(KEYS.WORKSPACE);
+    Storage.remove(KEYS.WORKSPACE_VERIFIED);
+    return;
+  }
+  _verified = {
+    path,
+    displayPath: displayPath || path,
+    hostPath: hostPath || '',
+    verified: !!verified,
+  };
+  Storage.set(KEYS.WORKSPACE, path);
+  Storage.setJSON(KEYS.WORKSPACE_VERIFIED, _verified);
+}
+
+function _emitVerified() {
+  if (!_verified?.path || !_verified.verified) return;
+  try {
+    document.dispatchEvent(new CustomEvent(WORKSPACE_VERIFIED_EVENT, {
+      detail: { ..._verified },
+    }));
+  } catch (_) {}
+}
+
+/** Server-validated workspace record (path chat/tools use). Null if none set. */
+export function getVerifiedWorkspace() {
+  return _loadVerifiedFromStorage();
+}
+
+/** Canonical workspace path for chat requests and IDE APIs. */
 export function getWorkspace() {
-  return Storage.get(KEYS.WORKSPACE, '') || '';
+  const v = getVerifiedWorkspace();
+  return v?.path || Storage.get(KEYS.WORKSPACE, '') || '';
 }
 
 function _basename(p) {
@@ -61,10 +124,13 @@ export function syncWorkspaceIndicator(path, { displayPath = '', hostPath = '' }
   try { document.dispatchEvent(new CustomEvent('overflow-state-change')); } catch (_) {}
 }
 
-export function setWorkspace(path, { displayPath = '', hostPath = '', notify = true } = {}) {
+export function setWorkspace(path, { displayPath = '', hostPath = '', notify = true, verified = true } = {}) {
   const prev = getWorkspace();
-  if (path) Storage.set(KEYS.WORKSPACE, path);
-  else Storage.remove(KEYS.WORKSPACE);
+  if (path) {
+    _persistVerified({ path, displayPath, hostPath, verified });
+  } else {
+    _persistVerified({ path: '' });
+  }
   syncWorkspaceIndicator(path || '', { displayPath, hostPath });
   const shown = displayPath || path || '';
   const changed = (prev || '') !== (path || '');
@@ -76,10 +142,12 @@ export function setWorkspace(path, { displayPath = '', hostPath = '', notify = t
           displayPath: shown,
           previous: prev,
           resync: !changed,
+          verified: !!path && verified,
         },
       }));
     } catch (_) {}
   }
+  if (path && verified) _emitVerified();
 }
 
 /** Resolve a stored or typed path against the server (maps Desktop → /workspace in Docker). */
@@ -94,7 +162,7 @@ export async function normalizeWorkspace(path, { notify = false } = {}) {
     const hostPath = v.host_path || '';
     const prev = getWorkspace();
     const shouldNotify = notify || prev !== v.path;
-    setWorkspace(v.path, { displayPath, hostPath, notify: shouldNotify });
+    setWorkspace(v.path, { displayPath, hostPath, notify: shouldNotify, verified: true });
     return {
       valid: true,
       path: v.path,
@@ -103,8 +171,22 @@ export async function normalizeWorkspace(path, { notify = false } = {}) {
       normalizedFrom: v.normalized_from || null,
     };
   }
-  if (_dockerWorkspace) clearWorkspace();
   return { valid: false, path: '', displayPath: '' };
+}
+
+/** Re-validate persisted workspace; returns verified record or null. */
+export async function ensureVerifiedWorkspace() {
+  await whenWorkspaceReady();
+  const cur = getVerifiedWorkspace();
+  if (cur?.verified && cur.path) return cur;
+  const raw = Storage.get(KEYS.WORKSPACE, '') || cur?.path || '';
+  if (!raw) return null;
+  try {
+    const n = await normalizeWorkspace(raw, { notify: true });
+    return n.valid ? getVerifiedWorkspace() : null;
+  } catch (_) {
+    return cur?.path ? cur : null;
+  }
 }
 
 export function clearWorkspace() {
@@ -360,8 +442,7 @@ async function _browseStartPath({ fromRoot = false } = {}) {
     return probe.default_root || '/workspace';
   }
   if (fromRoot) return '';
-  const stored = getWorkspace();
-  return stored || '';
+  return getWorkspace() || '';
 }
 
 export async function openWorkspaceBrowser({ fromRoot = true } = {}) {
@@ -394,22 +475,10 @@ export async function validateWorkspace(path) {
   return res.json();
 }
 
-/** True when agent shell/file work may proceed; opens picker if needed. */
 export async function ensureWorkspaceReady({ requireDocker = true } = {}) {
   await whenWorkspaceReady();
-  const stored = getWorkspace();
-  if (stored) {
-    try {
-      const n = await normalizeWorkspace(stored);
-      if (n.valid) return true;
-      clearWorkspace();
-      if (uiModule && uiModule.showToast) {
-        uiModule.showToast('Previous workspace folder not found — pick again');
-      }
-    } catch (_) {
-      /* fall through to picker */
-    }
-  }
+  const verified = await ensureVerifiedWorkspace();
+  if (verified?.path) return true;
   let docker = requireDocker;
   try {
     const probe = await validateWorkspace('');
@@ -426,20 +495,18 @@ export async function ensureWorkspaceReady({ requireDocker = true } = {}) {
 }
 
 async function _bootstrapWorkspace() {
-  const probe = await _probeEnvironment();
-  const stored = getWorkspace();
+  _loadVerifiedFromStorage();
+  await _probeEnvironment();
+  const stored = Storage.get(KEYS.WORKSPACE, '') || _verified?.path || '';
   if (stored) {
     try {
-      await normalizeWorkspace(stored);
+      const n = await normalizeWorkspace(stored, { notify: true });
+      if (!n.valid) clearWorkspace();
     } catch (_) {
-      clearWorkspace();
-    }
-  } else if (_dockerWorkspace) {
-    const root = probe.default_root || '/workspace';
-    try {
-      await normalizeWorkspace(root);
-    } catch (_) {
-      syncWorkspaceIndicator('');
+      syncWorkspaceIndicator(stored, {
+        displayPath: _verified?.displayPath || stored,
+        hostPath: _verified?.hostPath || '',
+      });
     }
   } else {
     syncWorkspaceIndicator('');
@@ -449,11 +516,17 @@ async function _bootstrapWorkspace() {
       detail: { docker: _dockerWorkspace },
     }));
   } catch (_) {}
+  _emitVerified();
 }
 
 export function initWorkspace() {
+  _loadVerifiedFromStorage();
   if (!_readyPromise) _readyPromise = _bootstrapWorkspace();
-  syncWorkspaceIndicator(getWorkspace());
+  const v = getVerifiedWorkspace();
+  syncWorkspaceIndicator(v?.path || getWorkspace(), {
+    displayPath: v?.displayPath,
+    hostPath: v?.hostPath,
+  });
   const overflow = document.getElementById('overflow-workspace-btn');
   if (overflow) overflow.addEventListener('click', () => openWorkspaceBrowser({ fromRoot: true }));
   const pill = document.getElementById('workspace-indicator-btn');
@@ -482,6 +555,8 @@ export default {
   initWorkspace,
   openWorkspaceBrowser,
   getWorkspace,
+  getVerifiedWorkspace,
+  ensureVerifiedWorkspace,
   setWorkspace,
   clearWorkspace,
   syncWorkspaceIndicator,
@@ -490,4 +565,5 @@ export default {
   ensureWorkspaceReady,
   whenWorkspaceReady,
   isDockerWorkspace,
+  WORKSPACE_VERIFIED_EVENT,
 };

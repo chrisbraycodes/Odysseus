@@ -6,14 +6,16 @@
 import Storage from './storage.js';
 import uiModule from './ui.js';
 import {
-  getWorkspace,
+  getVerifiedWorkspace,
+  ensureVerifiedWorkspace,
   openWorkspaceBrowser,
-  validateWorkspace,
   whenWorkspaceReady,
   isDockerWorkspace,
+  WORKSPACE_VERIFIED_EVENT,
 } from './workspace.js';
 import { createWorkspaceTerminalPanel } from './workspaceTerminal.js';
 import { mountWsPanelResize, unmountWsPanelResize, refreshWsPanelResize } from './wsPanelResize.js';
+import { isMobileIdeLayout, IDE_LAYOUT_EVENT } from './ideLayoutMode.js';
 
 const API_BASE = window.location.origin;
 const STORAGE_OPEN = 'ws-explorer-open';
@@ -27,11 +29,19 @@ let _pane = null;
 let _workbenchCol = null;
 let _terminalDock = null;
 let _isOpen = false;
-let _workspace = '';
-let _workspaceDisplay = '';
 let _treePath = '';
 let _expanded = new Set(['']);
 let _terminal = null;
+let _lastSyncedRoot = '';
+
+function _wsRoot() {
+  return getVerifiedWorkspace()?.path || '';
+}
+
+function _wsDisplay() {
+  const v = getVerifiedWorkspace();
+  return v?.displayPath || v?.path || '';
+}
 
 function _esc(s) {
   return uiModule.esc ? uiModule.esc(s) : String(s).replace(/[&<>"']/g, (c) =>
@@ -64,19 +74,18 @@ function _apiErrorDetail(err, fallback) {
   return fallback;
 }
 
-async function _resolveWorkspaceRoot(raw) {
-  const v = await validateWorkspace(raw);
-  if (!v.valid || !v.path) {
+async function _verifiedRoot() {
+  const v = await ensureVerifiedWorkspace();
+  if (!v?.path) {
     throw new Error(isDockerWorkspace()
       ? 'Workspace is not available in the container — pick a folder under /workspace'
       : 'Workspace folder not found');
   }
-  _workspaceDisplay = v.display_path || v.path;
   return v.path;
 }
 
 async function _fetchList(workspace, path = '') {
-  const root = await _resolveWorkspaceRoot(workspace);
+  const root = workspace || await _verifiedRoot();
   const qs = new URLSearchParams({ workspace: root, path });
   const res = await fetch(`${API_BASE}/api/workspace/list?${qs}`, { credentials: 'same-origin' });
   if (!res.ok) {
@@ -91,7 +100,7 @@ async function _fetchList(workspace, path = '') {
 }
 
 async function _fetchFile(workspace, path) {
-  const root = await _resolveWorkspaceRoot(workspace);
+  const root = workspace || await _verifiedRoot();
   const qs = new URLSearchParams({ workspace: root, path });
   const res = await fetch(`${API_BASE}/api/workspace/file?${qs}`, { credentials: 'same-origin' });
   if (!res.ok) {
@@ -107,8 +116,8 @@ function _basename(relPath) {
 }
 
 async function _downloadFile(relPath) {
-  if (!_workspace) return;
-  const root = await _resolveWorkspaceRoot(_workspace);
+  const root = _wsRoot();
+  if (!root) return;
   const qs = new URLSearchParams({ workspace: root, path: relPath });
   const res = await fetch(`${API_BASE}/api/workspace/download?${qs}`, { credentials: 'same-origin' });
   if (!res.ok) {
@@ -128,8 +137,8 @@ async function _downloadFile(relPath) {
 }
 
 async function _downloadFolder(relPath) {
-  if (!_workspace) return;
-  const root = await _resolveWorkspaceRoot(_workspace);
+  const root = _wsRoot();
+  if (!root) return;
   const qs = new URLSearchParams({ workspace: root, path: relPath || '' });
   const res = await fetch(`${API_BASE}/api/workspace/download-folder?${qs}`, { credentials: 'same-origin' });
   if (!res.ok) {
@@ -149,8 +158,8 @@ async function _downloadFolder(relPath) {
 }
 
 async function _importFiles(fileList) {
-  if (!_workspace || !fileList?.length) return;
-  const root = await _resolveWorkspaceRoot(_workspace);
+  const root = _wsRoot();
+  if (!root || !fileList?.length) return;
   const relDir = (_treePath || '').replace(/\\/g, '/').replace(/^\/+|\/+$/g, '');
   let ok = 0;
   for (const file of fileList) {
@@ -176,7 +185,7 @@ async function _importFiles(fileList) {
 }
 
 async function _deletePath(workspace, relPath, { recursive = false } = {}) {
-  const root = await _resolveWorkspaceRoot(workspace);
+  const root = workspace || await _verifiedRoot();
   const qs = new URLSearchParams({ workspace: root, path: relPath });
   if (recursive) qs.set('recursive', '1');
   const res = await fetch(`${API_BASE}/api/workspace/file?${qs}`, {
@@ -203,12 +212,13 @@ async function _confirmDelete(name, { isDir = false, recursive = false } = {}) {
 }
 
 async function _deleteEntry(relPath, { isDir = false } = {}) {
-  if (!_workspace) return;
+  const root = _wsRoot();
+  if (!root) return;
   const name = _basename(relPath);
   const recursive = isDir;
   if (!await _confirmDelete(name, { isDir, recursive })) return;
   try {
-    await _deletePath(_workspace, relPath, { recursive });
+    await _deletePath(root, relPath, { recursive });
     _docMod()?.removeWorkspaceFileTab?.(relPath);
     if (_expanded.has(relPath)) _expanded.delete(relPath);
     if (uiModule.showToast) uiModule.showToast(`Deleted ${name}`);
@@ -240,20 +250,14 @@ function _clearTreeError() {
 }
 
 async function _loadTree(path = _treePath) {
-  if (!_workspace || !_pane) return;
-  let root = _workspace;
+  let root;
   try {
-    const v = await validateWorkspace(_workspace);
-    if (!v.valid || !v.path) {
-      _renderTreeError('No workspace folder selected — open + → Workspace and choose your project folder.');
-      return;
-    }
-    root = v.path;
-    if (root !== _workspace) _workspace = root;
+    root = await _verifiedRoot();
   } catch (_) {
-    _renderTreeError('Could not verify workspace folder');
+    _renderTreeError('No workspace folder selected — open + → Workspace and choose your project folder.');
     return;
   }
+  if (!_pane) return;
   _treePath = path;
   const pathEl = _pane.querySelector('#ws-tree-path');
   if (pathEl) pathEl.textContent = path ? `/${path}` : '';
@@ -261,10 +265,6 @@ async function _loadTree(path = _treePath) {
   if (body) body.innerHTML = '<div class="ws-explorer-loading">Loading…</div>';
   try {
     const data = await _fetchList(root, path);
-    if (data.workspace_display) {
-      _workspaceDisplay = data.workspace_display;
-      _syncWorkspaceLabel();
-    }
     _clearTreeError();
     _renderTree(data);
   } catch (e) {
@@ -354,10 +354,11 @@ function _wireTreeRowActions(root) {
 
 async function _loadDirChildren(dirPath) {
   const host = _pane?.querySelector(`.ws-tree-children[data-parent="${CSS.escape(dirPath)}"]`);
-  if (!host || !_workspace) return;
+  const root = _wsRoot();
+  if (!host || !root) return;
   const { activePath, openPaths } = _fileTabState();
   try {
-    const data = await _fetchList(_workspace, dirPath);
+    const data = await _fetchList(root, dirPath);
     let html = '';
     for (const d of data.dirs) {
       const exp = _expanded.has(d.path);
@@ -407,12 +408,13 @@ function _toggleDir(dirPath) {
 }
 
 async function _openFileAt(relPath) {
-  if (!_workspace) return;
+  const root = _wsRoot();
+  if (!root) return;
   try {
-    const data = await _fetchFile(_workspace, relPath);
+    const data = await _fetchFile(root, relPath);
     try {
       _openFileInEditor({
-        workspace: _workspace,
+        workspace: root,
         path: data.path,
         content: data.content,
       });
@@ -462,7 +464,6 @@ function _buildPane() {
     <div class="ws-explorer-header">
       <div class="ws-explorer-title-row">
         <span class="ws-explorer-title">Project files</span>
-        <span class="prometheus-source-label">PROMETHEUS SOURCE</span>
       </div>
       <div class="ws-explorer-header-actions">
         <button type="button" class="ws-explorer-btn" id="ws-explorer-import" title="Import file from your computer">${_IMPORT_ICON}</button>
@@ -483,7 +484,7 @@ function _buildPane() {
 
   _pane.querySelector('#ws-explorer-close').addEventListener('click', () => closePanel());
   _pane.querySelector('#ws-explorer-refresh').addEventListener('click', () => {
-    if (_workspace) _loadTree(_treePath);
+    if (_wsRoot()) _loadTree(_treePath);
   });
   const wsLabel = _pane.querySelector('#ws-explorer-workspace');
   const openPicker = () => openWorkspaceBrowser({ fromRoot: true });
@@ -495,7 +496,7 @@ function _buildPane() {
     }
   });
   _pane.querySelector('#ws-explorer-import').addEventListener('click', () => {
-    if (!_workspace) {
+    if (!_wsRoot()) {
       if (uiModule.showError) uiModule.showError('Pick a workspace folder first');
       return;
     }
@@ -516,8 +517,9 @@ function _buildPane() {
 function _syncWorkspaceLabel() {
   const el = _pane?.querySelector('#ws-explorer-workspace');
   if (!el) return;
-  if (_workspace) {
-    const shown = _workspaceDisplay || _workspace;
+  const root = _wsRoot();
+  if (root) {
+    const shown = _wsDisplay() || root;
     el.textContent = shown;
     el.title = `${shown} — click to change workspace folder`;
   } else if (isDockerWorkspace()) {
@@ -552,39 +554,101 @@ function _renderNoWorkspaceState() {
   body.querySelector('#ws-pick-workspace')?.addEventListener('click', () => openWorkspaceBrowser());
 }
 
+function _workspaceForTerminal() {
+  return _wsRoot();
+}
+
 function _renderTerminalPlaceholder() {
   const mount = _terminalMountEl();
   if (!mount) return;
+  const hint = isDockerWorkspace()
+    ? 'Choose a project folder under <code>/workspace</code>. The terminal will appear here once a workspace is selected.'
+    : 'Choose a workspace folder first. The terminal will appear here after you pick your project directory.';
   mount.innerHTML = `
     <div class="ws-terminal-idle">
-      <div class="ws-terminal-idle-title">Terminal</div>
-      <div class="ws-terminal-idle-hint">Pick a workspace folder to start a shell in that directory.</div>
+      <div class="ws-terminal-idle-title">Choose a workspace</div>
+      <div class="ws-terminal-idle-hint">${hint}</div>
+      <button type="button" class="ws-explorer-pick-btn ws-terminal-pick-btn" id="ws-terminal-pick-workspace">Choose folder…</button>
     </div>`;
+  mount.querySelector('#ws-terminal-pick-workspace')?.addEventListener('click', () => {
+    openWorkspaceBrowser({ fromRoot: true });
+  });
+}
+
+function _prepareWorkspaceTerminal() {
+  if (_isMobileLayout()) _ensureMobileTerminalPanel();
+  const mount = _terminalMountEl();
+  if (!mount) return;
+  if (!_workspaceForTerminal()) {
+    _renderTerminalPlaceholder();
+    return;
+  }
+  if (!_terminal) _mountTerminal();
+  else {
+    try { _terminal.fitAll?.(); } catch (_) {}
+  }
 }
 
 function _mountTerminal() {
   _disposeTerminal();
   const mount = _terminalMountEl();
   if (!mount) return;
-  if (!_workspace) {
+  const ws = _workspaceForTerminal();
+  if (!ws) {
     _renderTerminalPlaceholder();
     return;
   }
   mount.innerHTML = '';
-  _terminal = createWorkspaceTerminalPanel(mount, { workspace: _workspace });
+  _terminal = createWorkspaceTerminalPanel(mount, { workspace: ws });
 }
 
 function _reconnectTerminal() {
-  if (!_isOpen || !_workspace) return;
+  if (!_isOpen || !_wsRoot()) return;
   if (_terminal?.reconnectAll) _terminal.reconnectAll();
   else _mountTerminal();
+}
+
+function _resetEditorWorkbenchLayout(pane) {
+  if (!pane) return;
+  pane.style.height = '';
+  pane.style.maxHeight = '';
+  pane.style.minHeight = '';
+  pane.style.flex = '';
+  pane.style.width = '';
+  pane.style.maxWidth = '';
 }
 
 function _adoptEditorIntoWorkbench() {
   if (!_workbenchCol || !_terminalDock) return;
   const pane = document.getElementById('doc-editor-pane');
-  if (!pane || pane.parentNode === _workbenchCol) return;
+  if (!pane) return;
+  _resetEditorWorkbenchLayout(pane);
+  if (pane.parentNode === _workbenchCol) return;
   _workbenchCol.insertBefore(pane, _terminalDock);
+}
+
+function _notifyTerminalLayout() {
+  requestAnimationFrame(() => {
+    _guardWorkbenchTerminalVisible();
+    try { refreshWsPanelResize(); } catch (_) {}
+    try { window.dispatchEvent(new Event('resize')); } catch (_) {}
+    try { document.dispatchEvent(new CustomEvent('ws-terminal-layout')); } catch (_) {}
+  });
+}
+
+/** Desktop: editor height:100% / inline flex can cover the terminal dock (overflow hidden). */
+function _guardWorkbenchTerminalVisible() {
+  if (_isMobileLayout()) return;
+  const workbench = document.getElementById('ws-workbench-column');
+  const terminal = document.getElementById('ws-terminal-dock');
+  const pane = document.getElementById('doc-editor-pane');
+  if (!workbench || !terminal) return;
+  const wb = workbench.getBoundingClientRect();
+  const td = terminal.getBoundingClientRect();
+  const clipped = td.height < 80 || td.bottom > wb.bottom + 2 || td.top >= wb.bottom - 4;
+  if (!clipped) return;
+  _resetEditorWorkbenchLayout(pane);
+  try { refreshWsPanelResize(); } catch (_) {}
 }
 
 function _ensureWorkbenchColumn() {
@@ -614,6 +678,7 @@ function _ensureWorkbenchColumn() {
   }
   _adoptEditorIntoWorkbench();
   mountWsPanelResize();
+  _notifyTerminalLayout();
   return true;
 }
 
@@ -661,26 +726,48 @@ function _mountPane() {
 }
 
 function _isMobileLayout() {
-  try {
-    return window.matchMedia('(max-width: 500px)').matches;
-  } catch (_) {
-    return false;
+  return isMobileIdeLayout();
+}
+
+function _onIdeLayoutModeChange() {
+  if (!_isOpen) return;
+  if (_isMobileLayout()) {
+    unmountWsPanelResize();
+    _releaseWorkbench();
+    _ensureMobileTerminalPanel();
+  } else {
+    _ensureWorkbenchColumn();
+    mountWsPanelResize();
+    _adoptEditorIntoWorkbench();
+    _docMod()?.ensurePaneMounted?.();
   }
+  _mountTerminal();
+  _notifyTerminalLayout();
+}
+
+let _lastMobileLayout = null;
+function _watchIdeLayoutMode() {
+  if (_watchIdeLayoutMode._wired) return;
+  _watchIdeLayoutMode._wired = true;
+  _lastMobileLayout = _isMobileLayout();
+  document.addEventListener(IDE_LAYOUT_EVENT, () => {
+    const now = _isMobileLayout();
+    if (now === _lastMobileLayout) return;
+    _lastMobileLayout = now;
+    _onIdeLayoutModeChange();
+    if (!now) ensureIdeLayoutOpen().catch(() => {});
+  });
 }
 
 async function _resolveWorkspacePath(ws) {
-  const v = await validateWorkspace(ws);
-  if (!v.valid || !v.path) return null;
-  _workspaceDisplay = v.display_path || v.path;
-  return v.path;
+  return ws || await _verifiedRoot();
 }
 
-/** Reload file tree + terminal for the active workspace (IDE sync). */
+/** Reload file tree + terminal from the verified workspace store (same path chat uses). */
 async function _syncExplorerToWorkspace({ clearEditorTabs = false } = {}) {
-  const ws = getWorkspace();
-  if (!ws) {
-    _workspace = '';
-    _workspaceDisplay = '';
+  const verified = await ensureVerifiedWorkspace();
+  if (!verified?.path) {
+    _lastSyncedRoot = '';
     _treePath = '';
     _expanded = new Set(['']);
     if (clearEditorTabs) _docMod()?.clearWorkspaceFiles?.();
@@ -690,36 +777,28 @@ async function _syncExplorerToWorkspace({ clearEditorTabs = false } = {}) {
     return false;
   }
 
-  let resolved = ws;
-  try {
-    const path = await _resolveWorkspacePath(ws);
-    if (!path) {
-      _workspace = '';
-      _workspaceDisplay = '';
-      _syncWorkspaceLabel();
-      _renderNoWorkspaceState();
-      _mountTerminal();
-      return false;
-    }
-    resolved = path;
-  } catch (_) {
-    if (uiModule.showError) uiModule.showError('Could not verify workspace');
-    return false;
-  }
-
-  const rootChanged = _workspace !== resolved;
-  _workspace = resolved;
+  const rootChanged = _lastSyncedRoot !== verified.path;
+  _lastSyncedRoot = verified.path;
   _treePath = '';
   _expanded = new Set(['']);
   if (clearEditorTabs || rootChanged) _docMod()?.clearWorkspaceFiles?.();
   _syncWorkspaceLabel();
   _mountTerminal();
   await _loadTree('');
+  _notifyTerminalLayout();
   return true;
 }
 
 export async function openPanel({ promptWorkspace = false } = {}) {
+  if (_isOpen) {
+    await _syncExplorerToWorkspace();
+    _notifyTerminalLayout();
+    return;
+  }
+
   if (!_mountPane()) return;
+
+  _watchIdeLayoutMode();
 
   document.body.classList.add('ws-explorer-view');
   _isOpen = true;
@@ -727,8 +806,12 @@ export async function openPanel({ promptWorkspace = false } = {}) {
 
   const overflow = document.getElementById('overflow-ws-files-btn');
   if (overflow) overflow.classList.add('active');
-  _ensureEditorInWorkbench();
-  mountWsPanelResize();
+  if (_isMobileLayout()) {
+    _ensureMobileTerminalPanel();
+  } else {
+    _ensureEditorInWorkbench();
+    mountWsPanelResize();
+  }
 
   const ok = await _syncExplorerToWorkspace();
   if (!ok && promptWorkspace) {
@@ -761,12 +844,7 @@ async function _onWorkspaceChanged(e) {
   const path = e.detail?.path || '';
   const resync = !!e.detail?.resync;
   if (!path) {
-    if (_isOpen) {
-      await _syncExplorerToWorkspace({ clearEditorTabs: true });
-    } else {
-      _workspace = '';
-      _workspaceDisplay = '';
-    }
+    if (_isOpen) await _syncExplorerToWorkspace({ clearEditorTabs: true });
     return;
   }
   if (!_isOpen) {
@@ -777,32 +855,68 @@ async function _onWorkspaceChanged(e) {
 }
 
 function _onWorkspaceFileTabsChanged() {
-  if (_isOpen && _workspace) _loadTree(_treePath);
+  if (_isOpen && _wsRoot()) _loadTree(_treePath);
 }
 
-/** Desktop IDE layout: project files + editor + bottom terminal. Always restored on load. */
-export async function ensureIdeLayoutOpen() {
-  if (_isMobileLayout()) return;
-  // One-time: old builds persisted "closed" — never honor that for IDE layout.
-  if (Storage.get(STORAGE_OPEN, '') === '0') Storage.remove(STORAGE_OPEN);
+/** Restore file tree + terminal from verified workspace store (survives browser refresh). */
+export async function restoreWorkspaceIde() {
   await whenWorkspaceReady();
-  if (!_isOpen) await openPanel();
-  else {
-    _ensureWorkbenchColumn();
-    _ensureEditorInWorkbench();
+  const verified = await ensureVerifiedWorkspace();
+  const ws = verified?.path || '';
+
+  if (ws) {
+    if (!_isOpen) await openPanel();
+    else await _syncExplorerToWorkspace();
+  } else if (_isMobileLayout()) {
+    return;
+  } else if (!_isOpen) {
+    await openPanel();
+  } else {
     await _syncExplorerToWorkspace();
   }
+
+  if (_isMobileLayout()) {
+    _ensureMobileTerminalPanel();
+    _prepareWorkspaceTerminal();
+    return;
+  }
+
+  _ensureWorkbenchColumn();
+  _ensureEditorInWorkbench();
   _docMod()?.openPanel?.();
   _docMod()?.ensurePaneMounted?.();
   _adoptEditorIntoWorkbench();
-  refreshWsPanelResize();
+  _notifyTerminalLayout();
+}
+
+/** Desktop IDE layout: project files + editor + bottom terminal. Restored on load. */
+export async function ensureIdeLayoutOpen() {
+  if (Storage.get(STORAGE_OPEN, '') === '0') Storage.remove(STORAGE_OPEN);
+  await restoreWorkspaceIde();
 }
 
 export function initWorkspaceExplorer() {
+  _watchIdeLayoutMode();
+  document.addEventListener('workspace-environment-ready', () => {
+    restoreWorkspaceIde().catch(() => {});
+  });
+  document.addEventListener(WORKSPACE_VERIFIED_EVENT, () => {
+    restoreWorkspaceIde().catch(() => {});
+  });
   document.addEventListener('workspace-changed', _onWorkspaceChanged);
   document.addEventListener('workspace-file-tabs-changed', _onWorkspaceFileTabsChanged);
+  document.addEventListener('workspace-file-saved', () => {
+    if (_isOpen && _wsRoot()) _loadTree(_treePath);
+  });
   document.addEventListener('open-workspace-explorer', () => {
     openPanel().catch(() => {});
+  });
+  document.addEventListener('prepare-workspace-terminal', () => {
+    _prepareWorkspaceTerminal();
+  });
+  document.addEventListener('ws-mob-terminal-show', () => {
+    _prepareWorkspaceTerminal();
+    _notifyTerminalLayout();
   });
   const btn = document.getElementById('overflow-ws-files-btn');
   if (btn) btn.addEventListener('click', togglePanel);
@@ -814,4 +928,5 @@ export default {
   closePanel,
   togglePanel,
   ensureIdeLayoutOpen,
+  restoreWorkspaceIde,
 };

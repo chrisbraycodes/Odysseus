@@ -1,233 +1,565 @@
 /* ═══════════════════════════════════════════════════════════════════
-   Mobile panel layout  (wsMobilePanels.js)
-   Activates at ≤ 768 px via body.ws-mob-view
+
+   Mobile panel layout  (wsMobilePanels.js + ideLayoutMode.js)
+
+   Active when user selects mobile layout: body.ws-mob-view
+
    1 or 2 panels visible at once, side by side, with a drag handle.
-   The sidebar (Odysseus menu) is untouched — keeps its own controls.
+
    ═══════════════════════════════════════════════════════════════════ */
+
+
+
+/* ── Flex row container ─────────────────────────────────────────── */
+
+body.ws-mob-view {
+
+  display: flex !important;
+
+  flex-direction: row !important;
+
+  align-items: stretch !important;
+
+  overflow: hidden !important;
+
+  padding: 0 !important;
+
+}
+
+
+
+/* Sidebar is a fixed overlay — closed by default, opened via hamburger */
+
+body.ws-mob-view #sidebar {
+
+  position: fixed !important;
+
+  flex: none !important;
+
+  min-width: 0 !important;
+
+  overflow: hidden;
+
+  z-index: 200;
+
+}
+
+body.ws-mob-view #sidebar-backdrop {
+
+  display: block !important;
+
+}
+
+body.ws-mob-view .hamburger-btn {
+
+  display: flex !important;
+
+  top: 6px;
+
+  left: 8px !important;
+
+  right: auto !important;
+
+  z-index: 220;
+
+  opacity: 0.85;
+
+  width: 44px;
+
+  height: 44px;
+
+}
+
+body.ws-mob-view.doc-view .hamburger-btn,
+
+body.ws-mob-view:has(#notes-pane) .hamburger-btn {
+
+  display: flex !important;
+
+}
+
+body.ws-mob-view .chat-top-bar {
+
+  padding-left: 48px !important;
+
+}
+
+
+
+body.ws-mob-view #chat-container,
+
+body.ws-mob-view #ws-explorer-pane,
+
+body.ws-mob-view #ws-workbench-column,
+
+body.ws-mob-view #doc-editor-pane,
+
+body.ws-mob-view #ws-mob-terminal-panel {
+
+  flex-shrink: 0 !important;
+
+  min-width: 0 !important;
+
+  min-height: 0 !important;
+
+  overflow: hidden !important;
+
+}
+
+
+
+body.ws-mob-view #ws-explorer-pane .ws-explorer-tree-section {
+
+  overflow-y: auto;
+
+  height: 100%;
+
+}
+
+
+
+body.ws-mob-view.ws-explorer-view .ws-explorer-pane {
+
+  position: relative !important;
+
+  inset: auto !important;
+
+  box-shadow: none;
+
+  grid-template-rows: auto auto minmax(0, 1fr);
+
+}
+
+
+
+body.ws-mob-view.ws-explorer-view .ws-ide-split,
+
+body.ws-mob-view.ws-explorer-view .ws-terminal-dock {
+
+  display: none !important;
+
+}
+
+
 
 @media (max-width: 768px) {
 
-  /* ── Flex row container ─────────────────────────────────────────── */
-  body.ws-mob-view {
-    display: flex !important;
-    flex-direction: row !important;
-    align-items: stretch !important;
-    overflow: hidden !important;
-    padding: 0 !important;
-    /* height is set by JS to window.visualViewport.height - 56 */
-  }
-
-  /* Sidebar: flex child, keeps its natural width, stays collapsible */
-  body.ws-mob-view #sidebar {
-    flex: 0 0 auto !important;
-    min-width: 0 !important;
-    overflow: hidden;
-    z-index: 10;
-  }
-
-  /* ── Panel reset — widths/heights driven entirely by JS ─────────── */
-  /* JS uses el.style.setProperty(..., 'important') so these just
-     establish a safe baseline that won't fight the JS values. */
-
-  body.ws-mob-view #chat-container,
-  body.ws-mob-view #ws-explorer-pane,
-  body.ws-mob-view #ws-workbench-column,
-  body.ws-mob-view #doc-editor-pane,
-  body.ws-mob-view #ws-mob-terminal-panel {
-    flex-shrink: 0 !important;
-    min-width: 0 !important;
-    min-height: 0 !important;
-    overflow: hidden !important;
-  }
-
-  /* ── File tree fills its column ─────────────────────────────────── */
-  body.ws-mob-view #ws-explorer-pane .ws-explorer-tree-section {
-    overflow-y: auto;
-    height: 100%;
-  }
-
-  /* ═══════════════════════════════════════════════════════════════
-     Font reductions — fit more content on phone
-     ═══════════════════════════════════════════════════════════════ */
-
-  /* Chat welcome / branding */
   body.ws-mob-view #welcome-screen .welcome-name {
+
     font-size: 1rem !important;
+
     margin-bottom: 2px !important;
+
   }
+
   body.ws-mob-view #welcome-screen {
+
     top: 15% !important;
+
     padding: 6px !important;
+
   }
+
   body.ws-mob-view #welcome-screen .welcome-tip,
+
   body.ws-mob-view #welcome-screen .welcome-sub {
+
     font-size: 0.7rem !important;
+
   }
 
-  /* Chat messages */
   body.ws-mob-view .msg .body {
+
     font-size: 0.82em !important;
+
     line-height: 1.4 !important;
+
   }
+
   body.ws-mob-view .msg .role {
+
     font-size: 0.7em !important;
+
   }
 
-  /* Chat top bar */
   body.ws-mob-view .chat-top-bar {
+
     padding: 4px 6px !important;
+
     min-height: 32px !important;
+
   }
+
   body.ws-mob-view .chat-top-bar * {
+
     font-size: 0.75em !important;
+
   }
 
-  /* File tree */
   body.ws-mob-view .ws-tree-body,
+
   body.ws-mob-view .ws-tree-label,
+
   body.ws-mob-view .ws-tree-row {
+
     font-size: 11px !important;
+
   }
+
   body.ws-mob-view .ws-tree-row {
+
     padding-top: 1px !important;
+
     padding-bottom: 1px !important;
+
     min-height: 20px !important;
+
   }
 
-  /* Chat input */
   body.ws-mob-view .msg-footer,
+
   body.ws-mob-view .msg-footer textarea {
+
     font-size: 0.82em !important;
+
   }
 
-  /* Session list */
   body.ws-mob-view .list-item {
+
     padding: 4px 6px !important;
+
     font-size: 0.78em !important;
+
   }
 
 }
 
+
+
+/* Layout mode toggle (chat top bar) */
+
+.chat-top-bar {
+
+  gap: 6px;
+
+}
+
+.ide-layout-toggle {
+
+  position: absolute;
+
+  left: 6px;
+
+  top: 50%;
+
+  transform: translateY(-50%);
+
+  z-index: 3;
+
+  display: inline-flex;
+
+  align-items: center;
+
+  justify-content: center;
+
+  min-height: 28px;
+
+  padding: 3px 8px;
+
+  border-radius: 999px;
+
+  border: 1px solid color-mix(in srgb, var(--fg) 22%, transparent);
+
+  background: color-mix(in srgb, var(--panel, var(--bg)) 88%, transparent);
+
+  color: var(--fg);
+
+  cursor: pointer;
+
+  transition: border-color 0.15s, background 0.15s, color 0.15s, box-shadow 0.15s;
+
+}
+
+.ide-layout-toggle-face {
+
+  display: none;
+
+  align-items: center;
+
+  gap: 5px;
+
+  font-size: 10px;
+
+  font-weight: 600;
+
+  letter-spacing: 0.04em;
+
+  text-transform: uppercase;
+
+}
+
+.ide-layout-toggle-text { line-height: 1; }
+
+.ide-layout-toggle--mobile {
+
+  border-color: color-mix(in srgb, var(--ember, #e05f3a) 55%, transparent);
+
+  background: color-mix(in srgb, var(--ember, #e05f3a) 14%, var(--panel, var(--bg)));
+
+  color: var(--ember, #e05f3a);
+
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--ember, #e05f3a) 20%, transparent);
+
+}
+
+.ide-layout-toggle--mobile .ide-layout-toggle-face--mobile { display: inline-flex; }
+
+.ide-layout-toggle--desktop .ide-layout-toggle-face--desktop { display: inline-flex; }
+
+.ide-layout-toggle:active { opacity: 0.75; }
+
+
+
 /* ═══════════════════════════════════════════════════════════════════
+
    Standalone terminal panel
+
    ═══════════════════════════════════════════════════════════════════ */
+
+
 
 .ws-mob-terminal-panel {
+
   display: flex;
+
   flex-direction: column;
+
   background: var(--bg, #111);
+
   overflow: hidden;
+
 }
+
+
 
 .ws-mob-terminal-panel .ws-terminal-mount {
+
   flex: 1 1 0;
+
   min-height: 0;
+
   overflow: hidden;
+
 }
+
+
 
 .ws-mob-terminal-panel .ws-terminal-host {
+
   height: 100%;
+
 }
 
+
+
 /* ═══════════════════════════════════════════════════════════════════
+
    Split drag handle  (one vertical handle between 2 panels)
+
    ═══════════════════════════════════════════════════════════════════ */
+
+
 
 .ws-mob-handle {
+
   position: fixed;
+
   z-index: 900;
+
   display: none;
+
   align-items: center;
+
   justify-content: center;
+
   touch-action: none;
+
   -webkit-user-select: none;
+
   user-select: none;
+
 }
+
+
 
 .ws-mob-handle-v {
+
   width: 20px;
+
   cursor: col-resize;
-  /* left / top / bottom set by JS */
+
 }
+
+
 
 .ws-mob-handle-bar {
+
   width: 4px;
+
   height: 44px;
+
   border-radius: 2px;
+
   background: color-mix(in srgb, var(--fg, #fff) 22%, transparent);
+
   transition: background 0.15s, height 0.15s;
+
   pointer-events: none;
+
 }
+
+
 
 .ws-mob-handle-v:hover  .ws-mob-handle-bar,
+
 .ws-mob-handle.dragging .ws-mob-handle-bar {
+
   background: var(--ember, #e05f3a);
+
   height: 64px;
+
 }
+
+
 
 /* ═══════════════════════════════════════════════════════════════════
+
    Bottom tab bar
+
    ═══════════════════════════════════════════════════════════════════ */
 
+
+
 .ws-mob-tabbar {
+
   position: fixed;
-  bottom: 0;         /* JS overrides this when keyboard is shown */
+
+  bottom: 0;
+
   left: 0;
+
   right: 0;
+
   height: 56px;
+
   background: var(--sidebar-bg, #161616);
+
   border-top: 1px solid color-mix(in srgb, var(--fg, #fff) 10%, transparent);
+
   display: flex;
+
   align-items: stretch;
+
   z-index: 950;
+
   padding-bottom: env(safe-area-inset-bottom, 0px);
+
 }
+
+
 
 .ws-mob-tab {
+
   flex: 1;
+
   display: flex;
+
   flex-direction: column;
+
   align-items: center;
+
   justify-content: center;
+
   gap: 2px;
+
   background: none;
+
   border: none;
+
   color: color-mix(in srgb, var(--fg, #fff) 38%, transparent);
+
   cursor: pointer;
+
   padding: 5px 2px 4px;
+
   transition: color 0.15s;
+
   touch-action: manipulation;
+
   -webkit-tap-highlight-color: transparent;
+
   position: relative;
+
 }
 
-/* Active indicator: top bar */
+
+
 .ws-mob-tab::before {
+
   content: '';
+
   position: absolute;
+
   top: 0;
+
   left: 15%;
+
   right: 15%;
+
   height: 2px;
+
   border-radius: 0 0 2px 2px;
+
   background: transparent;
+
   transition: background 0.15s;
+
 }
+
+
 
 .ws-mob-tab.ws-mob-tab-active        { color: var(--ember, #e05f3a); }
+
 .ws-mob-tab.ws-mob-tab-active::before { background: var(--ember, #e05f3a); }
+
 .ws-mob-tab:active                   { opacity: 0.6; }
 
+
+
 .ws-mob-icon {
+
   display: flex;
+
   align-items: center;
+
   justify-content: center;
+
 }
 
+
+
 .ws-mob-label {
+
   font-size: 9px;
+
   font-family: var(--font-family, 'Fira Code', monospace);
+
   font-weight: 500;
+
   letter-spacing: 0.02em;
+
   white-space: nowrap;
+
 }
+
+

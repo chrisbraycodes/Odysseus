@@ -16,6 +16,8 @@ import spinnerModule from './spinner.js';
 import { openLibrary, closeLibrary, isLibraryOpen, initLibrary } from './documentLibrary.js';
 import signatureModule from './signature.js';
 import * as Modals from './modalManager.js';
+import { openWorkspaceSavePicker, closeWorkspaceSavePicker } from './wsEditorSave.js';
+import { refreshWsPanelResize } from './wsPanelResize.js';
 
   let API_BASE = '';
   let isOpen = false;
@@ -48,8 +50,27 @@ import * as Modals from './modalManager.js';
     xml: 'html', html: 'html', css: 'css', markdown: 'markdown',
     json: 'json', yaml: 'yaml', bash: 'bash', shell: 'bash',
     sql: 'sql', rust: 'rust', go: 'go', java: 'java', c: 'c', cpp: 'cpp',
+    csharp: 'csharp', cs: 'csharp', ruby: 'ruby', php: 'php', toml: 'toml',
     csv: 'csv',
   };
+
+  /** Map the type-picker value to a highlight.js grammar name (or null). */
+  function _resolveHljsLanguage(lang) {
+    const l = (lang || '').toLowerCase();
+    if (!l || l === 'email' || l === 'pdf') return null;
+    const aliases = {
+      svg: 'xml', jsx: 'javascript', tsx: 'typescript', py: 'python',
+      sh: 'bash', shell: 'bash', yml: 'yaml', htm: 'html', cs: 'csharp',
+      'c++': 'cpp', rb: 'ruby',
+    };
+    return aliases[l] || l;
+  }
+
+  function _shouldUseSyntaxOverlay() {
+    const lang = (document.getElementById('doc-language-select')?.value || '').toLowerCase();
+    if (lang === 'email') return false;
+    return !document.getElementById('doc-editor-code')?.classList.contains('email-mode');
+  }
 
   // Languages rendered in the sandboxed preview iframe. SVG and XML markup
   // render as inline content in an HTML document, so they share the HTML
@@ -172,32 +193,153 @@ import * as Modals from './modalManager.js';
     if (ta) workspaceFiles.get(activeWorkspaceFile).content = ta.value;
   }
 
-  function _ensureWorkspaceSaveBtn() {
-    let btn = document.getElementById('doc-ws-save-btn');
-    if (btn) return btn;
-    const footer = document.getElementById('doc-actions-footer');
-    const hdr = document.getElementById('doc-editor-actions');
-    const host = footer || hdr;
-    if (!host) return null;
-    btn = document.createElement('button');
-    btn.id = 'doc-ws-save-btn';
-    btn.type = 'button';
-    btn.className = 'doc-action-icon-btn ws-save-btn';
-    btn.title = 'Save file (Ctrl+S)';
-    btn.textContent = 'Save';
-    btn.style.display = 'none';
-    btn.style.fontWeight = '600';
-    // Version badge and most controls live in the footer after openPanel setup —
-    // never insertBefore a node that isn't a direct child of host.
-    const split = footer?.querySelector('#doc-copy-export-split');
-    if (footer && split) split.before(btn);
-    else host.appendChild(btn);
-    btn.addEventListener('click', () => { saveWorkspaceFile().catch(() => {}); });
-    return btn;
+  async function _saveEditorContentToWorkspacePath(relPath, workspace) {
+    const ta = document.getElementById('doc-editor-textarea');
+    if (!ta) throw new Error('Editor not ready');
+    const content = ta.value;
+    const res = await fetch(`${API_BASE}/api/workspace/file`, {
+      method: 'PUT',
+      credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ workspace, path: relPath, content }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      const msg = typeof err.detail === 'string' ? err.detail : 'Save failed';
+      throw new Error(msg);
+    }
+    const prevPath = activeWorkspaceFile;
+    if (prevPath && prevPath !== relPath) {
+      workspaceFiles.delete(prevPath);
+    }
+    workspaceFiles.set(relPath, { path: relPath, content, dirty: false, workspace });
+    activeWorkspaceFile = relPath;
+    if (activeDocId) {
+      activeDocId = null;
+      _restoreDocEditorChrome();
+    }
+    _syncWorkspaceFileEditorUi(workspaceFiles.get(relPath));
+    renderTabs();
+    _syncWorkspaceFileTabsBodyClass();
+    _dispatchWorkspaceFileTabsChanged();
+    try {
+      document.dispatchEvent(new CustomEvent('workspace-file-saved', { detail: { path: relPath } }));
+    } catch (_) {}
+    if (uiModule?.showToast) uiModule.showToast(`Saved ${_wsBasename(relPath)}`);
+  }
+
+  function _suggestWorkspaceSaveFilename() {
+    if (activeWorkspaceFile) return _wsBasename(activeWorkspaceFile);
+    const doc = activeDocId && docs.get(activeDocId);
+    const lang = (document.getElementById('doc-language-select')?.value || doc?.language || '').toLowerCase();
+    const extMap = {
+      python: 'py', javascript: 'js', typescript: 'ts', markdown: 'md', json: 'json',
+      yaml: 'yaml', bash: 'sh', sql: 'sql', rust: 'rs', go: 'go', java: 'java',
+      html: 'html', css: 'css', xml: 'xml', csv: 'csv', toml: 'toml', ruby: 'rb', php: 'php',
+      c: 'c', cpp: 'cpp', csharp: 'cs',
+    };
+    const ext = extMap[lang] || 'txt';
+    const title = (doc?.title || '').trim().replace(/[^\w.\- ]+/g, '_').slice(0, 48);
+    if (title && title !== 'Untitled') return `${title}.${ext}`;
+    return `untitled.${ext}`;
+  }
+
+  function _saveSplitAnchorRect() {
+    const split = document.getElementById('doc-save-split');
+    const btn = document.getElementById('doc-save-main-btn');
+    return (btn || split)?.getBoundingClientRect?.() || { left: 0, top: 0, bottom: 0, right: 0, width: 0, height: 0 };
+  }
+
+  function _openWorkspaceSaveAsPicker() {
+    openWorkspaceSavePicker(_saveSplitAnchorRect(), {
+      defaultFilename: _suggestWorkspaceSaveFilename(),
+      onSave: (relPath, workspace) => _saveEditorContentToWorkspacePath(relPath, workspace),
+    });
+  }
+
+  async function _handlePrimaryEditorSave() {
+    closeWorkspaceSavePicker();
+    if (activeWorkspaceFile) {
+      const ft = workspaceFiles.get(activeWorkspaceFile);
+      if (ft?.dirty) {
+        try {
+          await saveWorkspaceFile();
+        } catch (err) {
+          if (uiModule?.showError) uiModule.showError(err.message || 'Save failed');
+        }
+      } else if (uiModule?.showToast) {
+        uiModule.showToast('Already saved');
+      }
+      return;
+    }
+    if (document.body.classList.contains('ws-explorer-view')) {
+      _openWorkspaceSaveAsPicker();
+      return;
+    }
+    await _performEditorSave();
+  }
+
+  async function _performEditorSave({ silent = false } = {}) {
+    if (activeWorkspaceFile) {
+      try {
+        await saveWorkspaceFile();
+      } catch (err) {
+        if (uiModule?.showError) uiModule.showError(err.message || 'Save failed');
+      }
+      return;
+    }
+    if (!activeDocId) return;
+    const doc = docs.get(activeDocId);
+    if (doc?.language === 'email') {
+      await _saveDraft();
+      return;
+    }
+    const live = document.getElementById('doc-editor-textarea')?.value
+      || doc?.content
+      || '';
+    if (_isFormBackedDoc(live)) {
+      await _savePdfPaneToMarkdown();
+      return;
+    }
+    await saveDocument({ silent });
+  }
+
+  function _syncDocSaveBtn() {
+    const split = document.getElementById('doc-save-split');
+    const mainBtn = document.getElementById('doc-save-main-btn');
+    const menuBtn = document.getElementById('doc-save-menu-btn');
+    const mobileBtn = document.getElementById('doc-mobile-save');
+    const inWsIde = document.body.classList.contains('ws-explorer-view');
+    const isEmail = docs.get(activeDocId)?.language === 'email';
+    const paneOpen = !!document.getElementById('doc-editor-pane');
+    const showWsSave = inWsIde && paneOpen && !isEmail;
+    const showDocSave = !inWsIde && !!(activeWorkspaceFile || (activeDocId && !isEmail));
+
+    if (split) split.style.display = (showWsSave || showDocSave) ? '' : 'none';
+    if (mainBtn) {
+      if (activeWorkspaceFile) {
+        const ft = workspaceFiles.get(activeWorkspaceFile);
+        mainBtn.disabled = false;
+        mainBtn.title = ft?.dirty ? 'Save file (Ctrl+S)' : 'Save file — no changes';
+      } else if (showWsSave) {
+        mainBtn.disabled = false;
+        mainBtn.title = 'Save to workspace (Ctrl+S) — pick location if new';
+      } else {
+        mainBtn.disabled = false;
+        mainBtn.title = 'Save (Ctrl+S)';
+      }
+    }
+    if (menuBtn) {
+      menuBtn.title = 'Save As… — choose folder in workspace';
+      menuBtn.disabled = !(showWsSave || activeWorkspaceFile);
+    }
+    if (mobileBtn) {
+      mobileBtn.style.display = (showWsSave || showDocSave) ? '' : 'none';
+      mobileBtn.disabled = false;
+    }
   }
 
   function _syncWorkspaceFileEditorUi(ft) {
-    const saveBtn = _ensureWorkspaceSaveBtn();
     const mdToolbar = document.getElementById('doc-md-toolbar');
     const emailHdr = document.getElementById('doc-email-header');
     const langSelect = document.getElementById('doc-language-select');
@@ -220,10 +362,7 @@ import * as Modals from './modalManager.js';
     if (diffBtn) diffBtn.style.display = 'none';
     if (emailHdr) emailHdr.style.display = 'none';
     if (mdToolbar) mdToolbar.style.display = 'none';
-    if (saveBtn) {
-      saveBtn.style.display = '';
-      saveBtn.disabled = !ft.dirty;
-    }
+    _syncDocSaveBtn();
     document.getElementById('doc-undo-btn')?.style.setProperty('display', 'none');
     document.getElementById('doc-export-pdf-btn')?.style.setProperty('display', 'none');
     document.getElementById('doc-pdf-view-btn')?.style.setProperty('display', 'none');
@@ -242,8 +381,7 @@ import * as Modals from './modalManager.js';
   }
 
   function _restoreDocEditorChrome() {
-    const saveBtn = document.getElementById('doc-ws-save-btn');
-    if (saveBtn) saveBtn.style.display = 'none';
+    _syncDocSaveBtn();
     document.getElementById('doc-undo-btn')?.style.removeProperty('display');
     document.getElementById('doc-export-pdf-btn')?.style.removeProperty('display');
     document.getElementById('doc-pdf-view-btn')?.style.removeProperty('display');
@@ -254,10 +392,7 @@ import * as Modals from './modalManager.js';
     const ft = workspaceFiles.get(path);
     if (!ft) return;
     ft.dirty = dirty;
-    if (path === activeWorkspaceFile) {
-      const saveBtn = document.getElementById('doc-ws-save-btn');
-      if (saveBtn) saveBtn.disabled = !dirty;
-    }
+    if (path === activeWorkspaceFile) _syncDocSaveBtn();
     renderTabs();
   }
 
@@ -266,6 +401,7 @@ import * as Modals from './modalManager.js';
     _hideLoadingOverlay();
     if (_diffModeActive) exitDiffMode(true);
     saveCurrentToMap();
+    activeDocId = null;
 
     activeWorkspaceFile = path;
     _syncWorkspaceFileEditorUi(workspaceFiles.get(path));
@@ -808,10 +944,9 @@ import * as Modals from './modalManager.js';
     if (badge) badge.textContent = '';
     _hideLoadingOverlay();
     syncHighlighting();
+    _syncDocSaveBtn();
     renderTabs();
   }
-
-  let _loadingSpinner = null;
   function _showLoadingOverlay() {
     const wrap = document.getElementById('doc-editor-wrap');
     if (!wrap) return;
@@ -3370,7 +3505,21 @@ import * as Modals from './modalManager.js';
     const body = (_rich ? (_rich.innerText || _rich.textContent || '') : (textarea?.value || '')).trim();
     const bodyHtml = _rich ? _rich.innerHTML : null;
     const btn = document.getElementById('doc-email-draft-btn');
-    if (btn) { btn.disabled = true; btn.textContent = 'Saving...'; }
+    const visibleBtn = document.getElementById('doc-email-save-draft-btn');
+    const _setDraftBusy = (busy) => {
+      for (const el of [btn, visibleBtn]) {
+        if (!el) continue;
+        el.disabled = busy;
+        if (el.id === 'doc-email-draft-btn') {
+          const lbl = el.querySelector('span:not(.dropdown-icon)');
+          if (lbl) lbl.textContent = busy ? 'Saving...' : 'Save Draft';
+        } else {
+          const lbl = el.querySelector('span');
+          if (lbl) lbl.textContent = busy ? 'Saving…' : 'Save';
+        }
+      }
+    };
+    _setDraftBusy(true);
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 18000);
     try {
@@ -3401,7 +3550,7 @@ import * as Modals from './modalManager.js';
       if (uiModule) uiModule.showError(timedOut ? 'Saving draft timed out' : 'Failed to save draft');
     } finally {
       clearTimeout(timeout);
-      if (btn) { btn.disabled = false; btn.textContent = 'Draft'; }
+      _setDraftBusy(false);
     }
   }
 
@@ -3864,6 +4013,7 @@ import * as Modals from './modalManager.js';
 
     renderTabs();
     _syncHeaderActions();
+    _syncDocSaveBtn();
 
     // Restore any persisted suggestions for this doc
     if (_activeSuggestions.length === 0) {
@@ -3994,6 +4144,18 @@ import * as Modals from './modalManager.js';
 
   // ---- Panel open/close ----
 
+  /** Strip desktop split-layout inline sizing so the IDE workbench can share
+   *  vertical space with the terminal dock (height:100% / flex:none covers it). */
+  function _resetEditorWorkbenchLayout(pane) {
+    if (!pane) return;
+    pane.style.height = '';
+    pane.style.maxHeight = '';
+    pane.style.minHeight = '';
+    pane.style.flex = '';
+    pane.style.width = '';
+    pane.style.maxWidth = '';
+  }
+
   /** Place doc pane + divider in layout; returns isRight for divider drag. */
   function _insertDocPaneInLayout(pane, divider, container) {
     const workbench = document.getElementById('ws-workbench-column');
@@ -4003,9 +4165,14 @@ import * as Modals from './modalManager.js';
     const isRight = sidebar && sidebar.classList.contains('right-side');
 
     if (useWorkbench) {
+      _resetEditorWorkbenchLayout(pane);
       pane.classList.toggle('doc-left', !!isRight);
       workbench.insertBefore(pane, terminalDock || null);
       container.parentNode.insertBefore(divider, container);
+      requestAnimationFrame(() => {
+        try { refreshWsPanelResize(); } catch (_) {}
+        try { window.dispatchEvent(new Event('resize')); } catch (_) {}
+      });
       return isRight;
     }
 
@@ -4108,6 +4275,15 @@ import * as Modals from './modalManager.js';
       }, true);
       pane.addEventListener('pointercancel', () => { _kbBtn = null; }, true);
     }
+    pane.addEventListener('keydown', (e) => {
+      if (!(e.ctrlKey || e.metaKey) || (e.key !== 's' && e.key !== 'S')) return;
+      const inWs = document.body.classList.contains('ws-explorer-view');
+      if (!activeDocId && !activeWorkspaceFile && !inWs) return;
+      e.preventDefault();
+      _handlePrimaryEditorSave().catch((err) => {
+        if (uiModule?.showError) uiModule.showError(err.message || 'Save failed');
+      });
+    }, true);
     pane.innerHTML = `
       <input type="hidden" id="doc-title-input" value="" />
       <div class="doc-mobile-grabber" id="doc-mobile-grabber" aria-hidden="true"></div>
@@ -4242,6 +4418,7 @@ import * as Modals from './modalManager.js';
       <div id="doc-email-actions" class="doc-email-actions" style="display:none">
         <button id="doc-email-discard-btn" class="email-discard-btn" title="Close email" style="display:inline-flex;align-items:center;gap:5px;"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg><span>Close</span></button>
         <span style="flex:1"></span>
+        <button id="doc-email-save-draft-btn" type="button" class="email-send-btn doc-email-save-draft-btn" title="Save draft (Ctrl+S)" style="display:inline-flex;align-items:center;gap:5px;margin-right:8px;"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg><span>Save</span></button>
         <div class="email-send-split">
           <button id="doc-email-send-btn" class="email-send-btn email-send-main" title="Send email (Ctrl+Enter)"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>Send</button>
           <button id="doc-email-send-caret" class="email-send-btn email-send-caret" title="More send options" aria-haspopup="true" aria-expanded="false"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="6 9 12 15 18 9"/></svg></button>
@@ -4263,6 +4440,10 @@ import * as Modals from './modalManager.js';
            csv / html / pdf) is the one growing to fill. -->
       <div id="doc-actions-footer" class="doc-email-actions">
         <span class="prometheus-source-label ws-only-prometheus-label">PROMETHEUS SOURCE</span>
+        <span class="email-send-split" id="doc-save-split">
+          <button type="button" id="doc-save-main-btn" class="email-send-btn email-send-main ws-save-btn" title="Save (Ctrl+S)"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>Save</button>
+          <button type="button" id="doc-save-menu-btn" class="email-send-btn email-send-caret" title="Save As…" aria-label="Save As options"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="6 15 12 9 18 15"/></svg></button>
+        </span>
         <span class="email-send-split" id="doc-copy-export-split">
           <button type="button" id="doc-footer-copy-btn" class="email-send-btn email-send-main" title="Copy document"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>Copy</button>
           <button type="button" id="doc-footer-export-btn" class="email-send-btn email-send-caret" title="Export as…" aria-label="Export options"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="6 15 12 9 18 15"/></svg></button>
@@ -4278,6 +4459,7 @@ import * as Modals from './modalManager.js';
       <div id="doc-mobile-footer" class="doc-mobile-footer">
         <button id="doc-mobile-close" class="doc-mobile-footer-btn" type="button">Unlink</button>
         <span style="flex:1"></span>
+        <button id="doc-mobile-save" class="doc-mobile-footer-btn" type="button">Save</button>
         <button id="doc-mobile-copy" class="doc-mobile-footer-btn" type="button">Copy</button>
       </div>
     `;
@@ -4312,7 +4494,9 @@ import * as Modals from './modalManager.js';
         // + stream indicator). Each item keeps its own display: toggling.
         const _streamInd = pane.querySelector('#doc-stream-indicator');
         const _versionBadge = pane.querySelector('#doc-version-badge');
+        const _saveSplit = pane.querySelector('#doc-save-split');
         if (_split) {
+          if (_saveSplit)    _split.before(_saveSplit);
           if (_pdfView)      _split.before(_pdfView);
           if (_exportPdf)    _split.before(_exportPdf);
           if (_versionBadge) _split.before(_versionBadge);
@@ -4454,9 +4638,21 @@ import * as Modals from './modalManager.js';
       else copyDocument();
     });
     document.getElementById('doc-footer-export-btn')?.addEventListener('click', (e) => showExportMenu(null, e.currentTarget.getBoundingClientRect()));
+    document.getElementById('doc-save-main-btn')?.addEventListener('click', () => {
+      _handlePrimaryEditorSave().catch(() => {});
+    });
+    document.getElementById('doc-save-menu-btn')?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (document.body.classList.contains('ws-explorer-view') || activeWorkspaceFile) {
+        _openWorkspaceSaveAsPicker();
+      }
+    });
     // Mobile footer: Close the current doc + Copy its content (replaces the
     // per-tab × on small screens, mirroring the email reader's Close footer).
     document.getElementById('doc-mobile-close')?.addEventListener('click', () => { if (activeDocId) closeTab(activeDocId); });
+    document.getElementById('doc-mobile-save')?.addEventListener('click', () => {
+      _handlePrimaryEditorSave().catch(() => {});
+    });
     document.getElementById('doc-mobile-copy')?.addEventListener('click', () => copyDocument());
     // Save, copy, run, export, delete, preview toggles are now in per-tab context menu
     document.getElementById('doc-version-badge').addEventListener('click', toggleVersionHistory);
@@ -4693,6 +4889,9 @@ import * as Modals from './modalManager.js';
     }
     document.getElementById('doc-email-draft-btn')?.addEventListener('click', () => {
       document.getElementById('doc-email-more-menu').style.display = 'none';
+      _saveDraft();
+    });
+    document.getElementById('doc-email-save-draft-btn')?.addEventListener('click', () => {
       _saveDraft();
     });
     document.getElementById('doc-email-discard-btn')?.addEventListener('click', _discardEmail);
@@ -5022,11 +5221,6 @@ import * as Modals from './modalManager.js';
       });
       // Tab key inserts a real tab; Escape clears selection
       ta.addEventListener('keydown', (e) => {
-        if ((e.ctrlKey || e.metaKey) && e.key === 's' && activeWorkspaceFile) {
-          e.preventDefault();
-          saveWorkspaceFile().catch((err) => { if (uiModule?.showError) uiModule.showError(err.message || 'Save failed'); });
-          return;
-        }
         if (e.key === 'Escape') {
           if (_diffModeActive) { exitDiffMode(true); return; }
           // First Esc clears any pinned selection without closing the
@@ -5236,7 +5430,14 @@ import * as Modals from './modalManager.js';
       });
     }
 
+    _syncDocSaveBtn();
     renderTabs();
+
+    // highlight.min.js is defer-loaded; re-color when it arrives after first paint.
+    if (!window.hljs) {
+      const _hljsScript = document.querySelector('script[src*="highlight.min.js"]');
+      _hljsScript?.addEventListener('load', () => { try { syncHighlighting(); } catch (_) {} }, { once: true });
+    }
 
     // If no docs loaded, show empty state with helpful placeholder
     if ((docs.size === 0 || !activeDocId) && workspaceFiles.size === 0 && !activeWorkspaceFile) {
@@ -5955,6 +6156,8 @@ import * as Modals from './modalManager.js';
     });
     document.addEventListener('mousemove', (e) => {
       if (!dragging) return;
+      // Workspace IDE uses column flex (editor + terminal); width drag breaks it.
+      if (document.body.classList.contains('ws-explorer-view')) return;
       const width = isRight
         ? e.clientX
         : window.innerWidth - e.clientX;
@@ -6602,16 +6805,23 @@ import * as Modals from './modalManager.js';
     codeEl.textContent = text + '\n';
 
     const lang = document.getElementById('doc-language-select')?.value;
-    // hljs has no 'svg' grammar — highlight it as xml (the dropdown value stays
-    // 'svg' so the preview/run routing still treats it as renderable markup).
-    const _hlLang = lang === 'svg' ? 'xml' : lang;
-    codeEl.className = _hlLang ? `language-${_hlLang}` : '';
-    if (window.hljs && _hlLang) {
+    const useOverlay = _shouldUseSyntaxOverlay();
+    const _hlLang = useOverlay ? _resolveHljsLanguage(lang) : null;
+
+    if (!useOverlay) {
+      codeEl.className = '';
       codeEl.removeAttribute('data-highlighted');
-      window.hljs.highlightElement(codeEl);
+    } else if (window.hljs) {
+      codeEl.className = _hlLang ? `language-${_hlLang}` : '';
+      codeEl.removeAttribute('data-highlighted');
+      try {
+        window.hljs.highlightElement(codeEl);
+      } catch (_) {
+        codeEl.textContent = text + '\n';
+      }
     }
     // Markdown post-processing: colorize standalone [brackets] and heading markers
-    if (lang === 'markdown') {
+    if (lang === 'markdown' && useOverlay) {
       _postProcessMarkdown(codeEl);
     }
 

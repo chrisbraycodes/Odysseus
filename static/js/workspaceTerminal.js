@@ -265,6 +265,12 @@ export function createWorkspaceTerminal(mountEl, opts) {
     term.onResize(() => _sendResize());
   }
 
+  function fit() {
+    if (!fitAddon || !term) return;
+    try { fitAddon.fit(); } catch (_) { /* ignore */ }
+    _sendResize();
+  }
+
   function _sendResize() {
     if (!socket || socket.readyState !== WebSocket.OPEN || !term) return;
     socket.send(JSON.stringify({ type: 'resize', cols: term.cols, rows: term.rows }));
@@ -366,7 +372,7 @@ export function createWorkspaceTerminal(mountEl, opts) {
     reconnectBtn.style.display = '';
   });
 
-  return { connect, dispose, setStatus, focus: () => term?.focus() };
+  return { connect, dispose, setStatus, focus: () => term?.focus(), fit, _fit: fit };
 }
 
 /**
@@ -467,6 +473,8 @@ export function createWorkspaceTerminalPanel(mountEl, opts) {
   }
 
   function dispose() {
+    document.removeEventListener('ws-terminal-layout', fitAll);
+    window.removeEventListener('resize', fitAll);
     tabs.forEach((t) => t.term?.dispose());
     tabs.length = 0;
     mountEl.innerHTML = '';
@@ -483,9 +491,26 @@ export function createWorkspaceTerminalPanel(mountEl, opts) {
     ids.forEach(() => addTab());
   }
 
+  function fitAll() {
+    tabs.forEach((t) => {
+      try { t.term?.fit?.(); } catch (_) { /* ignore */ }
+    });
+  }
+
   addTab();
 
-  return { addTab, closeTab, activateTab, dispose, reconnectAll };
+  document.addEventListener('ws-terminal-layout', fitAll);
+  window.addEventListener('resize', fitAll);
+
+  return {
+    addTab,
+    closeTab,
+    activateTab,
+    dispose,
+    reconnectAll,
+    fitAll,
+    _onLayout: fitAll,
+  };
 }
 
 export default { createWorkspaceTerminal, createWorkspaceTerminalPanel };

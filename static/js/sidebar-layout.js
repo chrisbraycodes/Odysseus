@@ -225,6 +225,10 @@ export function initSidebarLayout(Storage, opts) {
 
   function checkSidebarAutoCollapse() {
     if (_userToggledSidebar) return;
+    // Mobile panel layout keeps the sidebar as a fixed overlay — auto-collapse
+    // against chat width fights wsMobilePanels resize cycles and flickers open/closed.
+    if (document.body.classList.contains('ws-mob-view') ||
+        document.body.classList.contains('ide-layout-mobile')) return;
     const sidebar = document.getElementById('sidebar');
     if (!sidebar) return;
     const isHidden = sidebar.classList.contains('hidden');

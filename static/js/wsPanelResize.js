@@ -1,6 +1,8 @@
 // static/js/wsPanelResize.js — drag-to-resize handles for the desktop IDE layout
 // (project files | editor | terminal | chat).
 
+import { isDesktopIdeLayout, IDE_LAYOUT_EVENT } from './ideLayoutMode.js';
+
 const STORAGE_KEY = 'ws-ide-layout-v1';
 const MIN_FILES = 200;
 const MIN_CHAT = 280;
@@ -19,8 +21,7 @@ let _onUp = null;
 let _onWinResize = null;
 
 function _isDesktop() {
-  try { return !window.matchMedia('(max-width: 768px)').matches; }
-  catch (_) { return true; }
+  return isDesktopIdeLayout();
 }
 
 function _loadSizes() {
@@ -59,24 +60,47 @@ function _applySizes() {
   const files = document.getElementById('ws-explorer-pane');
   const chat = document.getElementById('chat-container');
   const terminal = document.getElementById('ws-terminal-dock');
-  if (!files || !chat || !terminal || !_sizes) return;
+  if (!terminal || !_sizes) return;
 
   const s = _sizes;
-  files.style.flex = `0 0 ${s.files}px`;
-  files.style.width = `${s.files}px`;
-  files.style.maxWidth = `${s.files}px`;
-
-  chat.style.flex = `0 0 ${s.chat}px`;
-  chat.style.width = `${s.chat}px`;
-  chat.style.maxWidth = `${s.chat}px`;
+  if (files) {
+    files.style.flex = `0 0 ${s.files}px`;
+    files.style.width = `${s.files}px`;
+    files.style.maxWidth = `${s.files}px`;
+  }
+  if (chat) {
+    chat.style.flex = `0 0 ${s.chat}px`;
+    chat.style.width = `${s.chat}px`;
+    chat.style.maxWidth = `${s.chat}px`;
+  }
 
   terminal.style.flex = `0 0 ${s.terminal}px`;
   terminal.style.height = `${s.terminal}px`;
   terminal.style.maxHeight = `${s.terminal}px`;
+  terminal.style.minHeight = `${MIN_TERMINAL}px`;
+  terminal.style.display = 'flex';
+  terminal.style.visibility = 'visible';
+  terminal.style.overflow = 'hidden';
 
-  document.body.style.setProperty('--ws-files-width', `${s.files}px`);
-  document.body.style.setProperty('--ws-chat-width', `${s.chat}px`);
+  if (files) document.body.style.setProperty('--ws-files-width', `${s.files}px`);
+  if (chat) document.body.style.setProperty('--ws-chat-width', `${s.chat}px`);
   document.body.style.setProperty('--ws-terminal-height', `${s.terminal}px`);
+}
+
+function _applyTerminalSizeOnly() {
+  const terminal = document.getElementById('ws-terminal-dock');
+  if (!terminal) return false;
+  _sizes = _sizes || _loadSizes();
+  _sizes.terminal = _clampTerminal(_sizes.terminal);
+  const h = _sizes.terminal;
+  terminal.style.flex = `0 0 ${h}px`;
+  terminal.style.height = `${h}px`;
+  terminal.style.maxHeight = `${h}px`;
+  terminal.style.minHeight = `${MIN_TERMINAL}px`;
+  terminal.style.display = 'flex';
+  terminal.style.visibility = 'visible';
+  document.body.style.setProperty('--ws-terminal-height', `${h}px`);
+  return true;
 }
 
 function _clearPanelSizes() {
@@ -122,8 +146,9 @@ function _clampChat(w) {
 
 function _clampTerminal(h) {
   const workbench = document.getElementById('ws-workbench-column');
-  const max = workbench
-    ? Math.max(MIN_TERMINAL, workbench.getBoundingClientRect().height - 120)
+  const wbH = workbench?.getBoundingClientRect().height || 0;
+  const max = wbH > 0
+    ? Math.max(MIN_TERMINAL, wbH - 80)
     : Math.round(window.innerHeight * MAX_TERMINAL_VH);
   const vhCap = Math.round(window.innerHeight * MAX_TERMINAL_VH);
   return Math.round(Math.max(MIN_TERMINAL, Math.min(max, vhCap, h)));
@@ -135,15 +160,15 @@ function _startDrag(handle, kind, e) {
   const files = document.getElementById('ws-explorer-pane');
   const chat = document.getElementById('chat-container');
   const terminal = document.getElementById('ws-terminal-dock');
-  if (!files || !chat || !terminal) return;
+  if (!terminal) return;
 
   _sizes = _sizes || _loadSizes();
   _drag = {
     kind,
     handle,
     pointerId: e.pointerId,
-    filesLeft: files.getBoundingClientRect().left,
-    chatRight: chat.getBoundingClientRect().right,
+    filesLeft: files?.getBoundingClientRect().left ?? _ideRowLeft(),
+    chatRight: chat?.getBoundingClientRect().right ?? (window.innerWidth - 8),
     workbenchBottom: document.getElementById('ws-workbench-column')?.getBoundingClientRect().bottom
       ?? terminal.getBoundingClientRect().bottom,
   };
@@ -226,11 +251,17 @@ function _placeHandles() {
 
 export function mountWsPanelResize() {
   if (!_isDesktop()) return;
-  if (!_placeHandles()) return;
 
-  _sizes = _loadSizes();
-  _applySizes();
+  _sizes = _sizes || _loadSizes();
+  _applyTerminalSizeOnly();
   _mounted = true;
+
+  if (!_placeHandles()) {
+    _reclampSizes();
+    return;
+  }
+
+  _applySizes();
 
   if (!_onMove) {
     _onMove = (e) => _moveDrag(e);
@@ -259,7 +290,23 @@ export function unmountWsPanelResize() {
 }
 
 export function refreshWsPanelResize() {
-  if (!_mounted || !_isDesktop()) return;
+  if (!_isDesktop()) return;
+  _sizes = _sizes || _loadSizes();
+  if (!_mounted) {
+    _applyTerminalSizeOnly();
+    if (_placeHandles()) _mounted = true;
+  }
+  if (!_mounted) return;
   _placeHandles();
-  _applySizes();
+  _reclampSizes();
+  requestAnimationFrame(() => {
+    try { window.dispatchEvent(new Event('resize')); } catch (_) {}
+  });
+}
+
+if (typeof document !== 'undefined') {
+  document.addEventListener(IDE_LAYOUT_EVENT, () => {
+    if (isDesktopIdeLayout()) refreshWsPanelResize();
+    else unmountWsPanelResize();
+  });
 }
