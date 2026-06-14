@@ -97,7 +97,7 @@ function Start-HostAgent {
     $sw = [System.Diagnostics.Stopwatch]::StartNew()
     # Invoke via cmd /c (not Start-Process -Wait -NoNewWindow) so a detached pythonw child
     # does not keep the launcher blocked on the shared console.
-    & cmd.exe /c "`"$bat`" -NoPause"
+    & cmd.exe /c "`"$bat`" -Restart -NoPause"
     $exitCode = $LASTEXITCODE
     $sw.Stop()
     if ($exitCode -eq 0) {

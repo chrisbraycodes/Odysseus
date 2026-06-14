@@ -74,6 +74,10 @@ def _auth_ok(request: web.Request) -> bool:
 def _shell_argv(shell: str = "powershell") -> list[str]:
     choice = (shell or "powershell").strip().lower()
     if choice == "cmd":
+        system_root = os.environ.get("SystemRoot", r"C:\Windows")
+        cmd_path = os.path.join(system_root, "System32", "cmd.exe")
+        if os.path.isfile(cmd_path):
+            return [cmd_path]
         comspec = os.environ.get("ComSpec") or shutil.which("cmd.exe")
         return [comspec or "cmd.exe"]
     for cand in (
@@ -300,20 +304,24 @@ async def handle_terminal_ws(request: web.Request) -> web.WebSocketResponse:
     ws = web.WebSocketResponse()
     await ws.prepare(request)
 
-    term = _SESSIONS.get(session_id)
-    if term is None or not term.is_alive():
-        term = HostTerminalSession(safe_cwd, cols, rows, shell=shell)
-        term.start()
-        _SESSIONS[session_id] = term
+    prev = _SESSIONS.pop(session_id, None)
+    if prev is not None:
+        prev.close()
+    term = HostTerminalSession(safe_cwd, cols, rows, shell=shell)
+    term.start()
+    _SESSIONS[session_id] = term
+    logger.info("terminal session %s shell=%s cwd=%s", session_id, shell, safe_cwd)
 
+    shell_label = "CMD" if shell == "cmd" else "PowerShell"
     await ws.send_str(
         json.dumps(
             {
                 "type": "status",
                 "phase": "ready",
-                "message": "Connected to Windows host",
+                "message": f"Connected to Windows host ({shell_label})",
                 "session": session_id,
                 "cwd": safe_cwd,
+                "shell": shell,
             }
         )
     )

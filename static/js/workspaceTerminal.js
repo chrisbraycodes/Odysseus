@@ -208,6 +208,7 @@ export function createWorkspaceTerminal(mountEl, opts) {
 
   let hostShell = 'powershell';
   let hostUnrestricted = false;
+  let lastConnectedHostShell = '';
 
   async function _syncShellToolbar(status) {
     const show = isHostTerminalEnabled(status);
@@ -226,6 +227,8 @@ export function createWorkspaceTerminal(mountEl, opts) {
       await saveHostTerminalShell(next, { workspace, unrestricted: hostUnrestricted });
       hostShell = next;
       sessionId = '';
+      lastConnectedHostShell = '';
+      if (term) term.clear();
       await connect();
     } catch (err) {
       shellSelect.value = hostShell;
@@ -336,10 +339,17 @@ export function createWorkspaceTerminal(mountEl, opts) {
       const status = await fetchHostTerminalStatus(workspace);
       useHost = isHostTerminalActive(status);
       await _syncShellToolbar(status);
-      if (useHost) hostShell = getHostTerminalShell(status);
+      if (useHost) {
+        hostShell = shellSelect.value === 'cmd' ? 'cmd' : getHostTerminalShell(status);
+        shellSelect.value = hostShell;
+      }
     } catch (_) {
       useHost = false;
       shellWrap.hidden = true;
+    }
+
+    if (useHost && lastConnectedHostShell && lastConnectedHostShell !== hostShell) {
+      sessionId = '';
     }
 
     const params = new URLSearchParams({
@@ -350,8 +360,11 @@ export function createWorkspaceTerminal(mountEl, opts) {
     if (useHost) {
       params.set('host', '1');
       params.set('shell', hostShell);
+      sessionId = '';
+      if (term) term.clear();
+    } else if (sessionId) {
+      params.set('session', sessionId);
     }
-    if (sessionId) params.set('session', sessionId);
 
     socket = new WebSocket(`${_wsBase()}/api/terminal/ws?${params}`);
     socket.binaryType = 'arraybuffer';
@@ -371,9 +384,15 @@ export function createWorkspaceTerminal(mountEl, opts) {
         try {
           const msg = JSON.parse(ev.data);
           if (msg.type === 'status') {
-            if (msg.session) sessionId = msg.session;
+            if (msg.session && !useHost) sessionId = msg.session;
             if (msg.phase === 'ready') {
-              setStatus(msg.message || 'Connected', 'ready');
+              if (useHost) {
+                lastConnectedHostShell = msg.shell || hostShell;
+                const label = lastConnectedHostShell === 'cmd' ? 'CMD' : 'PowerShell';
+                setStatus(msg.message || `Connected (${label})`, 'ready');
+              } else {
+                setStatus(msg.message || 'Connected', 'ready');
+              }
               term.focus();
               window.setTimeout(() => {
                 if (statusEl.dataset.phase === 'ready') {

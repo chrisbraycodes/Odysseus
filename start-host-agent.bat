@@ -4,8 +4,12 @@ title Odysseus Windows Host Agent
 pushd "%~dp0" >nul
 
 set "NO_PAUSE="
+set "RESTART="
 if /i "%~1"=="-NoPause" set "NO_PAUSE=1"
 if /i "%~2"=="-NoPause" set "NO_PAUSE=1"
+if /i "%~1"=="-Restart" set "RESTART=1"
+if /i "%~2"=="-Restart" set "RESTART=1"
+if /i "%~3"=="-Restart" set "RESTART=1"
 
 for /f "usebackq tokens=1,* delims==" %%A in (`findstr /r /b "WORKSPACE_HOST_AGENT_TOKEN=" ".env" 2^>nul`) do set "WORKSPACE_HOST_AGENT_TOKEN=%%B"
 if not defined WORKSPACE_HOST_AGENT_TOKEN (
@@ -26,12 +30,19 @@ if not exist ".host-agent-venv\Scripts\python.exe" (
   ".host-agent-venv\Scripts\python.exe" -m pip install -q -r scripts\host_agent_requirements.txt
 )
 
-powershell -NoProfile -Command ^
-  "$t=$env:WORKSPACE_HOST_AGENT_TOKEN; try { $r=Invoke-WebRequest -Uri 'http://127.0.0.1:17789/health' -Headers @{Authorization=\"Bearer $t\"} -UseBasicParsing -TimeoutSec 2; if ($r.StatusCode -eq 200) { exit 0 } } catch {}; exit 1"
-if not errorlevel 1 (
-  echo Windows host agent is already running on 127.0.0.1:17789
-  popd >nul
-  exit /b 0
+if defined RESTART (
+  echo Restarting Windows host agent...
+  powershell -NoProfile -Command ^
+    "Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object { $_.CommandLine -like '*windows_host_agent*' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }"
+  ping -n 3 127.0.0.1 >nul
+) else (
+  powershell -NoProfile -Command ^
+    "$t=$env:WORKSPACE_HOST_AGENT_TOKEN; try { $r=Invoke-WebRequest -Uri 'http://127.0.0.1:17789/health' -Headers @{Authorization=\"Bearer $t\"} -UseBasicParsing -TimeoutSec 2; if ($r.StatusCode -eq 200) { exit 0 } } catch {}; exit 1"
+  if not errorlevel 1 (
+    echo Windows host agent is already running on 127.0.0.1:17789
+    popd >nul
+    exit /b 0
+  )
 )
 
 if not exist logs mkdir logs

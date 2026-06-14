@@ -13,7 +13,7 @@ This repository is based on upstream Odysseus. The components below are Promethe
 | Area | What it is | Key paths |
 |------|------------|-----------|
 | **Workspace IDE** | In-browser project workspace at `/workspace`: file tree, multi-tab editor, integrated terminal (xterm.js PTY), dev-server preview, Desktop bind-mount support, desktop/mobile layout modes | `static/js/workspaceExplorer.js`, `workspaceTerminal.js`, `workspace.js`, `workspaceSessions.js`, `ideLayoutMode.js`, `document.js` (workspace tabs), `routes/workspace_routes.py`, `routes/terminal_routes.py`, `src/workspace_path.py`, `src/workspace_dev.py`, `src/terminal_manager.py` |
-| **Windows host terminal** | Real **PowerShell** or **CMD** on the Windows host while Odysseus runs in Docker; consent flow, host agent, npm/node exec routing | `scripts/windows_host_agent.py`, `start-host-agent.bat`, `launch-docker.ps1`, `src/host_agent_client.py`, `src/host_terminal_consent.py`, `routes/host_terminal_routes.py`, `static/js/hostTerminal.js` |
+| **Windows host terminal** | Real **PowerShell** or **CMD** on the Windows host; consent flow; shell picker; host agent auto-restart from `start.bat`; npm/node exec routing to host | `scripts/windows_host_agent.py`, `start-host-agent.bat`, `launch-docker.ps1`, `src/host_agent_client.py`, `src/host_agent_paths.py`, `src/host_terminal_consent.py`, `routes/host_terminal_routes.py`, `static/js/hostTerminal.js` |
 | **Agent workspace tooling** | Confined file/shell tools, shell orchestration, workspace file-create/analyze orchestration, semantic workspace index, per-workspace chat binding, plan execution, and action intents tied to the active workspace folder | `src/tool_execution.py`, `src/shell_orchestration.py`, `src/direct_shell.py`, `src/workspace_file_orchestration.py`, `src/workspace_analyze_orchestration.py`, `src/workspace_index.py`, `src/plan_execution.py`, `src/action_intents.py`, `routes/chat_routes.py` |
 | **Windows deployment** | One-command Docker/native launchers, Windows host agent auto-start, and Docker update helper for this install | `start.bat`, `start-host-agent.bat`, `start-native.bat`, `launch-windows.ps1`, `launch-docker.ps1`, `update_windows.bat` |
 | **Local context benchmark** | GPU VRAM sweep methodology, agent token budgets, and compose tuning for any NVIDIA/AMD card | `docs/context-benchmark.md`, `scripts/find_max_context.py`, `scripts/benchmark_context.py` |
@@ -25,16 +25,30 @@ Everything else — chat, agent loop, Cookbook, Deep Research, email, calendar, 
 
 ### Current state (June 2026)
 
-This fork is actively developed as **Prometheus Source on Odysseus** for public production use. Recent Prometheus Source work includes:
+This fork is the **public production release** of **Prometheus Source on Odysseus** by **Christopher Bray** (**YARB Industries LLC**). What ships today:
 
-- **Windows host terminal** — `start.bat` launches a local host agent; enable from chat; choose **PowerShell** or **CMD** in the terminal toolbar; npm/node dev servers run on your PC (Christopher Bray · YARB Industries LLC)
-- **Workspace IDE** — desktop grid layout, mobile tab switching, workspace editor tabs, and layout persistence
-- **Per-workspace chats** — switching project folders restores the chat bound to that workspace
-- **Agent orchestration for small local models (e.g. Qwen 7B)** — auto `write_file` for numbered file batches; auto scan + optional Chroma semantic index for “analyze this project”; English “make a file” no longer routed to GNU `make`
-- **Local LLM compatibility** — fenced-tool defaults for llama.cpp/Ollama; tool-history flattening to avoid HTTP 422 on local OpenAI-compat servers
-- **Deep workspace analysis** — `workspace_index` / `workspace_search` tools plus auto-injected scan context; rule-based fallback summary if the model returns empty after tools run
+| Capability | Status |
+|------------|--------|
+| **Workspace IDE** | Production — desktop grid (file tree · editor · terminal · chat), mobile tab layout, workspace editor tabs, layout persistence |
+| **Windows host terminal** | Production — real **PowerShell** or **CMD** on your PC while Odysseus runs in Docker; shell picker in the terminal toolbar; `start.bat` **restarts** the host agent so code updates apply |
+| **Host agent + npm/node routing** | Production — agent exec and dev servers can run on the Windows host inside your workspace folder (scoped by default) |
+| **Per-workspace chats** | Production — switching project folders restores the chat bound to that workspace |
+| **Agent orchestration (local LLMs)** | Production — auto `write_file` batches, project scan + Chroma index, English “make a file” not routed to GNU `make` |
+| **Local LLM compatibility** | Production — fenced-tool defaults for llama.cpp/Ollama; tool-history flattening to avoid HTTP 422 on local OpenAI-compat servers |
+| **Deep workspace analysis** | Production — `workspace_index` / `workspace_search` tools, auto-injected scan context, rule-based fallback if the model returns empty after tools |
 
-After pulling: `docker compose up -d --build odysseus`, hard-refresh the browser, use **Agent** mode with a workspace folder selected for file and analysis tasks. On Windows Docker, run `start.bat` once so the host agent is ready before enabling the host terminal.
+**Prometheus Source** (Christopher Bray · YARB Industries LLC) — not upstream Odysseus:
+
+- Workspace IDE UI and layout contract (`/workspace`, `AGENTS.md`, `docs/workspace-ide-layout.md`)
+- Windows host terminal bridge (host agent, consent, PowerShell/CMD PTY, path mapping)
+- Windows launchers (`start.bat`, `start-host-agent.bat`, `launch-docker.ps1`, …)
+- Agent workspace tooling confined to the active project folder
+- GPU context benchmark docs and compose tuning helpers
+- Docker `/workspace` bind-mount and `WORKSPACE_HOST_PATH` overrides
+
+Everything else — core chat, Cookbook, Deep Research, email, calendar, memory, and the base Odysseus UI — remains **upstream Odysseus** unless listed above.
+
+After pulling: run `start.bat` on Windows (or `docker compose up -d --build odysseus`), hard-refresh the browser, pick a workspace folder, enable the Windows host terminal from chat if you need npm on your PC, then use **Agent** mode for file and analysis tasks.
 
 ![Prometheus Source — Odysseus workspace IDE with file tree, editor, terminal, and local LLM chat](docs/images/prometheus-source-preview.png)
 
@@ -262,6 +276,7 @@ in the UI from any path the server can read.
   - **Deep Research** -- multi-step runs that gather, read, and synthesize sources into a nice visual report.<br>　<sub>adapted from [Tongyi DeepResearch](https://github.com/Alibaba-NLP/DeepResearch)</sub>
   - **Compare** -- a fun tool to compare models side by side. Test completely blind, no bias!<br>　<sub>multi-model · blind test · synthesis</sub>
   - **Prometheus Source (Workspace IDE)** -- open a project folder and work in a full IDE layout: file tree, editor tabs, terminal, and live dev previews.<br>　<sub>Prometheus Source · Christopher Bray · YARB Industries LLC · `/workspace` · xterm.js · Desktop bind mount</sub>
+  - **Prometheus Source (Windows host terminal)** -- on Windows Docker, run a real **PowerShell** or **CMD** on your PC from the IDE terminal; npm, Vite, and dev servers execute on the host, not inside Linux.<br>　<sub>Prometheus Source · Christopher Bray · YARB Industries LLC · host agent · consent flow · shell picker</sub>
   - **Documents** -- YOU write the text, AI is there to assist, not the opposite.<br>　<sub>multi-tab editor · markdown · HTML · CSV · syntax highlighting · AI edits · suggestions</sub>
   - **Memory / Skills** -- Persistent memory and skills, your agent evolves over time as it better understands you and your tasks!<br>　<sub>ChromaDB · fastembed (ONNX) · vector + keyword retrieval · import/export</sub>
   - **Email** -- IMAP/SMTP inbox with AI triage built in: urgency reminders, auto-tag, auto-summary, auto-reply drafts, auto-spam.<br>　<sub>IMAP · SMTP · per-account routing · CalDAV-aware</sub>
@@ -516,22 +531,40 @@ do not run on macOS. MLX-only models are not served by Odysseus.
 
 | Script | Use when |
 |--------|----------|
-| `start.bat` | **Docker (recommended on Windows)** — starts the Windows host agent, brings up the Compose stack, waits for the server, opens the browser. Requires Docker Desktop + Python 3 on the host (for the agent). |
-| `start-host-agent.bat` | **Host agent only** — manual fallback if the terminal says the agent is not running. |
+| `start.bat` | **Docker (recommended on Windows)** — **restarts** the Windows host agent, brings up the Compose stack, waits for the server, opens the browser. Requires Docker Desktop + Python 3 on the host. |
+| `start-host-agent.bat` | **Host agent only** — starts the agent if stopped; use `start-host-agent.bat -Restart` to force-reload after code changes. |
 | `start-native.bat` | **No Docker** — creates the venv, installs deps, runs setup, starts uvicorn. |
 | `update_windows.bat` | Pull latest code and rebuild/restart an existing Docker deployment. |
 
 ### Windows host terminal (Prometheus Source)
 
+> Original work by **Christopher Bray** (**YARB Industries LLC**). Not part of upstream Odysseus.
+
 When Odysseus runs in **Docker on Windows**, the in-container terminal is Linux. Prometheus Source adds a **Windows host terminal** so npm, Vite, and other dev tools run on your real PC:
 
 1. Set `WORKSPACE_HOST_PATH` in `.env` (e.g. `C:/Users/YOUR_USER/Desktop`).
-2. Run `start.bat` — wait for **Windows host agent ready**.
+2. Run `start.bat` — wait for **Windows host agent ready** (the launcher restarts the agent each run).
 3. Open `/workspace`, pick a project folder, accept the workspace risk prompt.
 4. In chat, click **Enable Windows host terminal** (or use the workspace host-terminal command).
-5. In the **terminal toolbar**, choose **PowerShell** or **CMD**, then use the terminal as usual.
+5. In the **terminal toolbar**, choose **PowerShell** or **CMD**, then click **Reconnect** if you change shells.
 
-The host agent listens on `127.0.0.1:17789` (HTTP) and `17790` (WebSocket) on your PC only. Token: `WORKSPACE_HOST_AGENT_TOKEN` in `.env` (auto-generated on first `start.bat` run). Logs: `logs/host-agent.log`.
+**Shell prompts**
+
+| Shell | Typical prompt |
+|-------|----------------|
+| **CMD** | `C:\Users\YOU\Desktop\YourProject>` |
+| **PowerShell** | `PS C:\Users\YOU\Desktop\YourProject>` |
+
+The status bar shows **Connected to Windows host (CMD)** or **(PowerShell)** when the link is live.
+
+**Host agent (local only)**
+
+| Item | Value |
+|------|--------|
+| HTTP | `127.0.0.1:17789` (`/health`, `/v1/exec`) |
+| WebSocket terminal | `127.0.0.1:17790` (`/v1/terminal`) |
+| Token | `WORKSPACE_HOST_AGENT_TOKEN` in `.env` (auto-generated on first `start.bat`) |
+| Logs | `logs/host-agent.log` |
 
 <sub>Prometheus Source · Christopher Bray · YARB Industries LLC</sub>
 
@@ -770,6 +803,8 @@ All user data lives in `data/` (gitignored): `app.db` (sessions, messages, docum
 
 ## License
 MIT -- see [LICENSE](LICENSE) and [ACKNOWLEDGMENTS.md](ACKNOWLEDGMENTS.md).
+
+**Attribution:** The **Prometheus Source** workspace IDE, Windows host terminal, Windows launchers, agent workspace tooling, GPU context benchmark methodology, and related Docker/workspace integration in this repository are original work by **Christopher Bray** (**YARB Industries LLC**). Upstream Odysseus remains MIT-licensed separately; see [ACKNOWLEDGMENTS.md](ACKNOWLEDGMENTS.md) for third-party and upstream credits.
 
 ```
                                   |
