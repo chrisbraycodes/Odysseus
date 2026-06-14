@@ -2,19 +2,35 @@
 
 ## Prometheus Source
 
+**Creator:** [Christopher Bray](https://github.com/chrisbraycodes) · **YARB Industries LLC**
+
+Prometheus Source is Christopher Bray’s original workspace-IDE and deployment layer integrated on top of upstream Odysseus. The name **Prometheus Source** refers to that integration — the in-browser project workspace at `/workspace`, confined agent file/shell tooling, Windows launchers, GPU context benchmarks, and related orchestration — not to the entire Odysseus application (chat, Cookbook, email, memory, and the core UI remain upstream unless listed below).
+
 This repository is based on upstream Odysseus. The components below are Prometheus Source — original work by Christopher Bray (YARB Industries LLC) — integrated into this deployment:
 
 | Area | What it is | Key paths |
 |------|------------|-----------|
-| **Workspace IDE** | In-browser project workspace at `/workspace`: file tree, multi-tab editor, integrated terminal (xterm.js PTY), dev-server preview, Desktop bind-mount support | `static/js/workspaceExplorer.js`, `workspaceTerminal.js`, `workspace.js`, `document.js` (workspace tabs), `routes/workspace_routes.py`, `routes/terminal_routes.py`, `src/workspace_path.py`, `src/workspace_dev.py`, `src/terminal_manager.py` |
-
-**Layout rule (agents & contributors):** on desktop, the file tree, editor, and terminal must never be hidden. See [AGENTS.md](AGENTS.md) and [docs/workspace-ide-layout.md](docs/workspace-ide-layout.md).
-| **Agent workspace tooling** | Confined file/shell tools, shell orchestration, plan execution, and action intents tied to the active workspace folder | `src/tool_execution.py`, `src/shell_orchestration.py`, `src/direct_shell.py`, `src/plan_execution.py`, `src/action_intents.py`, `routes/chat_routes.py` |
+| **Workspace IDE** | In-browser project workspace at `/workspace`: file tree, multi-tab editor, integrated terminal (xterm.js PTY), dev-server preview, Desktop bind-mount support, desktop/mobile layout modes | `static/js/workspaceExplorer.js`, `workspaceTerminal.js`, `workspace.js`, `workspaceSessions.js`, `ideLayoutMode.js`, `document.js` (workspace tabs), `routes/workspace_routes.py`, `routes/terminal_routes.py`, `src/workspace_path.py`, `src/workspace_dev.py`, `src/terminal_manager.py` |
+| **Agent workspace tooling** | Confined file/shell tools, shell orchestration, workspace file-create/analyze orchestration, semantic workspace index, per-workspace chat binding, plan execution, and action intents tied to the active workspace folder | `src/tool_execution.py`, `src/shell_orchestration.py`, `src/direct_shell.py`, `src/workspace_file_orchestration.py`, `src/workspace_analyze_orchestration.py`, `src/workspace_index.py`, `src/plan_execution.py`, `src/action_intents.py`, `routes/chat_routes.py` |
 | **Windows deployment** | One-command Docker/native launchers and Docker update helper for this install | `start.bat`, `start-native.bat`, `launch-windows.ps1`, `launch-docker.ps1`, `update_windows.bat` |
 | **Local context benchmark** | GPU VRAM sweep methodology, agent token budgets, and compose tuning for any NVIDIA/AMD card | `docs/context-benchmark.md`, `scripts/find_max_context.py`, `scripts/benchmark_context.py` |
 | **Docker overrides** | Configurable `/workspace` mount, dev-preview port mapping (`WORKSPACE_HOST_PATH` in `.env`) | `docker-compose.yml`, `.env.example` |
 
+**Layout rule (agents & contributors):** on desktop, the file tree, editor, and terminal must never be hidden. See [AGENTS.md](AGENTS.md) and [docs/workspace-ide-layout.md](docs/workspace-ide-layout.md).
+
 Everything else — chat, agent loop, Cookbook, Deep Research, email, calendar, memory, and the core Odysseus UI — comes from upstream Odysseus unless noted above.
+
+### Current state (June 2026)
+
+This fork is actively developed as **Prometheus Source on Odysseus**. Recent Prometheus Source work includes:
+
+- **Workspace IDE** — desktop grid layout, mobile tab switching, workspace editor tabs, and layout persistence
+- **Per-workspace chats** — switching project folders restores the chat bound to that workspace
+- **Agent orchestration for small local models (e.g. Qwen 7B)** — auto `write_file` for numbered file batches; auto scan + optional Chroma semantic index for “analyze this project”; English “make a file” no longer routed to GNU `make`
+- **Local LLM compatibility** — fenced-tool defaults for llama.cpp/Ollama; tool-history flattening to avoid HTTP 422 on local OpenAI-compat servers
+- **Deep workspace analysis** — `workspace_index` / `workspace_search` tools plus auto-injected scan context; rule-based fallback summary if the model returns empty after tools run
+
+After pulling: `docker compose up -d --build odysseus`, hard-refresh the browser, use **Agent** mode with a workspace folder selected for file and analysis tasks.
 
 ![Prometheus Source — Odysseus workspace IDE with file tree, editor, terminal, and local LLM chat](docs/images/prometheus-source-preview.png)
 
@@ -707,7 +723,8 @@ Prometheus Source (Christopher Bray · YARB Industries LLC):
   workspace/              # Default host mount (override via WORKSPACE_HOST_PATH)
   routes/workspace_routes.py, routes/terminal_routes.py
   src/workspace_path.py, workspace_dev.py, terminal_manager.py
-  static/js/workspaceExplorer.js, workspaceTerminal.js, workspace.js
+  src/workspace_file_orchestration.py, workspace_analyze_orchestration.py, workspace_index.py
+  static/js/workspaceExplorer.js, workspaceTerminal.js, workspace.js, workspaceSessions.js
   start.bat, start-native.bat, launch-windows.ps1, launch-docker.ps1, update_windows.bat
   docs/context-benchmark.md, scripts/benchmark_context.py, scripts/find_max_context.py
 ```

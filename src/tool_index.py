@@ -98,6 +98,8 @@ BUILTIN_TOOL_DESCRIPTIONS: Dict[str, str] = {
     "grep": "Search file CONTENTS for a regex across a directory tree (ripgrep-backed, honours .gitignore). Returns file:line:match. Use to find where code/symbols/strings live — prefer over bash grep.",
     "glob": "Find FILES by glob pattern (e.g. '**/*.py'), newest first. Use to locate files by name/extension — prefer over bash find/ls.",
     "ls": "List a directory's entries (folders then files with sizes). Use to see what's in a folder — prefer over bash ls.",
+    "workspace_index": "Index the active workspace into a semantic vector store for deep repo-wide search (respects .gitignore). Auto-runs on project analysis; use force=true to rebuild.",
+    "workspace_search": "Semantic search over the indexed workspace — finds relevant code chunks across the whole repo for architecture and flow questions.",
     "write_file": "Write/create or fully rewrite a file ON DISK (source code, configs, project files). Use for new files or full rewrites — NOT create_document (editor panel) and NOT a bash heredoc.",
     "edit_file": "Edit an existing file ON DISK by exact string replacement (fix a bug, change a function). Shows a diff. The tool for changing files on disk — NOT edit_document (editor panel) and NOT bash sed/heredoc.",
     "delete_file": "Delete a file or directory in the workspace. Use for delete/remove/clear requests on project files. Set recursive=true for non-empty folders. Prefer over bash rm — do not refuse workspace deletions.",
@@ -369,6 +371,10 @@ class ToolIndex:
             {"manage_calendar"},
         frozenset({"note", "todo", "reminder", "remind", "checklist", "remember to"}):
             {"manage_notes"},
+        frozenset({"analyze project", "analyze this", "codebase", "architecture",
+                   "how does this work", "what is this project", "what is this website",
+                   "repo structure", "trace the flow", "whole workspace", "index workspace"}):
+            {"workspace_index", "workspace_search", "grep", "glob", "read_file", "ls"},
         # Chat/session management. "rename" alone maps to documents below, so a
         # request like "rename the last 12 sessions/chats" needs these session
         # keywords to surface the right tools (NOT app_api — /api/sessions is

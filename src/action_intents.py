@@ -120,6 +120,11 @@ _ROUTING_PATTERNS: tuple[tuple[str, str, Pattern[str]], ...] = tuple(
         ("workspace", "numbered workspace files", r"\b(?:increment(?:ing)?|counting)\s+(?:up\s+)?(?:to|through)\s+\d+\b"),
         ("workspace", "save created files", r"\bsave\s+them\b"),
 
+        # Workspace analysis (read/explore — not chat-only Q&A).
+        ("workspace", "analyze project", r"\b(?:analyze|analyse|review|explore|inspect|audit|summarize|summarise|explain|describe|understand)\b.{0,80}\b(?:this\s+)?(?:project|codebase|workspace|repo(?:sitory)?|app(?:lication)?|website|site|code|folder|directory|whole\s+workspace)\b"),
+        ("workspace", "what is project about", r"\bwhat\s+(?:is|does)\s+(?:this\s+)?(?:project|website|app|codebase|repo|site)\b"),
+        ("workspace", "project stack question", r"\bwhat\s+(?:tools|tech(?:nologies)?|stack|frameworks?)\b.{0,60}\b(?:used|built|make|making)\b"),
+
         # Workspace file mutations (delete/remove/clear).
         ("workspace", "delete/remove workspace file", rf"{_PLEASE}(?:delete|remove)\s+(?:the\s+)?(?:file\s+)?[\w./~-]+\S*"),
         ("workspace", "delete all in folder", rf"{_PLEASE}delete\s+all\b"),

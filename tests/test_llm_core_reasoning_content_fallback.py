@@ -141,3 +141,25 @@ def test_stream_agent_reasoning_not_duplicated_as_normal_delta():
     assert chunk is None, (
         f"reasoning text was re-emitted as a normal delta chunk: {chunk!r}"
     )
+
+
+def test_empty_response_with_tools_uses_orchestration_fallback():
+    final, chunk = _empty_response_fallback(
+        full_response="",
+        round_reasoning="",
+        tool_events=[{"tool": "read_file"}],
+        orchestration_fallback="## Project overview\nBuilt with Python.",
+    )
+    assert final.startswith("## Project overview")
+    assert chunk is not None
+
+
+def test_empty_response_with_tools_without_fallback_shows_error():
+    final, chunk = _empty_response_fallback(
+        full_response="",
+        round_reasoning="",
+        tool_events=[{"tool": "read_file"}],
+    )
+    assert "no summary" in final.lower()
+    assert chunk is not None
+

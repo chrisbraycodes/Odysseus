@@ -144,6 +144,35 @@ FUNCTION_TOOL_SCHEMAS = [
     {
         "type": "function",
         "function": {
+            "name": "workspace_index",
+            "description": "Index the active workspace into a semantic vector store for deep repo-wide search (respects .gitignore, skips node_modules). Use before architecture/flow questions on large projects, or pass force=true to rebuild.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "force": {"type": "boolean", "description": "Rebuild even if index is fresh (optional)"}
+                },
+                "required": []
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "workspace_search",
+            "description": "Semantic search over the indexed active workspace — finds relevant code chunks across the whole repo. Prefer for architecture maps, tracing flows, and 'how does X work' questions.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "Natural-language or keyword search query"},
+                    "k": {"type": "integer", "description": "Max results (optional, default 12)"}
+                },
+                "required": ["query"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "write_file",
             "description": "Write/save a file to disk",
             "parameters": {
@@ -1262,7 +1291,7 @@ def function_call_to_tool_block(name: str, arguments: str) -> Optional[ToolBlock
             content = json.dumps(args)
         else:
             content = args.get("path", "")
-    elif tool_type in ("grep", "glob", "ls"):
+    elif tool_type in ("grep", "glob", "ls", "workspace_index", "workspace_search"):
         content = json.dumps(args) if args else "{}"
     elif tool_type == "write_file":
         content = args.get("path", "") + "\n" + args.get("content", "")

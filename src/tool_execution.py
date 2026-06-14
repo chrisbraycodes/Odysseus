@@ -1137,6 +1137,14 @@ async def _direct_fallback(
                 return {"error": err, "exit_code": 1}
             return {"output": _truncate(out), "exit_code": 0}
 
+        if tool == "workspace_index":
+            from src.workspace_index import run_workspace_index_tool
+            return await run_workspace_index_tool(content, workspace=workspace)
+
+        if tool == "workspace_search":
+            from src.workspace_index import run_workspace_search_tool
+            return await run_workspace_search_tool(content, workspace=workspace)
+
         if tool == "web_search":
             from src.search import comprehensive_web_search
             raw = content.strip()
@@ -1473,7 +1481,7 @@ async def execute_tool_block(
         first_line = content.split(chr(10))[0][:80]
         desc = f"{tool}: {first_line}"
         result = await _call_mcp_tool(tool, content, progress_cb=progress_cb, workspace=workspace)
-    elif tool in ("grep", "glob", "ls", "delete_file"):
+    elif tool in ("grep", "glob", "ls", "delete_file", "workspace_index", "workspace_search"):
         # Code-navigation / filesystem tools — no MCP server; direct implementation.
         first_line = content.split(chr(10))[0][:80]
         desc = f"{tool}: {first_line}"

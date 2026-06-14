@@ -223,7 +223,37 @@ Fetch and read the text content of a SPECIFIC URL the user names (e.g. "check ex
 ```read_file
 <file path>
 ```
-Read a file and return its contents.""",
+Read a file and return its contents. Use relative paths from the active workspace (e.g. `README.md`, `src/app.py`). For large files pass JSON: `{"path": "x.py", "offset": 1, "limit": 200}`.""",
+
+    "ls": """\
+```ls
+<directory path or empty for workspace root>
+```
+List files and folders in a directory. Use first when exploring a project — empty body lists the workspace root.""",
+
+    "glob": """\
+```glob
+**/*.{py,js,ts,json,md}
+```
+Or JSON: `{"pattern": "**/*.py", "path": "src"}`. Find files by glob pattern under the workspace (skips node_modules, .git, etc.).""",
+
+    "grep": """\
+```grep
+{"pattern": "FastAPI", "glob": "**/*.py", "max_results": 50}
+```
+Search file contents with regex. Use to find routes, imports, config keys, or how a feature is wired.""",
+
+    "workspace_index": """\
+```workspace_index
+{"force": false}
+```
+Build or refresh the semantic vector index of the active workspace (respects .gitignore; skips node_modules). Run before deep architecture questions on large repos. Auto-runs on "analyze this project" — use manually to force rebuild.""",
+
+    "workspace_search": """\
+```workspace_search
+{"query": "how does authentication work", "k": 12}
+```
+Semantic search over the indexed workspace — finds relevant code chunks across the whole repo. Prefer this over reading files one-by-one for architecture / flow questions.""",
 
     "write_file": """\
 ```write_file
@@ -1367,10 +1397,57 @@ async def _run_verifier_subagent(
     return [r.strip() for r in reasons.split(";") if r.strip()]
 
 
+def _apply_agent_context_trim(
+    messages: list,
+    *,
+    context_length: int,
+    max_tokens: int,
+) -> list:
+    """Soft-trim messages to fit the configured agent input token budget."""
+    try:
+        from src.context_compactor import trim_for_context
+        from src.context_budget import compute_input_token_budget, DEFAULT_HARD_MAX
+        from src.settings import get_setting, is_setting_overridden
+
+        soft_budget = int(get_setting("agent_input_token_budget", 6000) or 0)
+        if soft_budget <= 0:
+            return messages
+        reserve_tokens = min(max(max_tokens or 1024, 512), 2048)
+        try:
+            hard_max = int(get_setting("agent_input_token_hard_max", DEFAULT_HARD_MAX) or DEFAULT_HARD_MAX)
+        except (TypeError, ValueError):
+            hard_max = DEFAULT_HARD_MAX
+        if hard_max <= 0:
+            hard_max = DEFAULT_HARD_MAX
+        effective_budget = compute_input_token_budget(
+            soft_budget,
+            context_length,
+            is_setting_overridden("agent_input_token_budget"),
+            hard_max=hard_max,
+        )
+        before = estimate_tokens(messages)
+        trimmed = trim_for_context(messages, effective_budget, reserve_tokens=reserve_tokens)
+        after = estimate_tokens(trimmed)
+        if after < before:
+            logger.info(
+                "[agent] soft-trimmed context: %s -> %s tokens (budget=%s, reserve=%s)",
+                before,
+                after,
+                effective_budget,
+                reserve_tokens,
+            )
+        return trimmed
+    except Exception as e:
+        logger.warning("[agent] Soft context trim skipped: %s", e)
+        return messages
+
+
 def _empty_response_fallback(
     full_response: str,
     round_reasoning: str,
     tool_events: list,
+    *,
+    orchestration_fallback: str = "",
 ) -> tuple:
     """Return (final_response, sse_chunk_or_none) for the end-of-loop empty-response guard.
 
@@ -1383,10 +1460,18 @@ def _empty_response_fallback(
         (final_response: str, chunk: str | None)
             chunk is the SSE string to yield, or None if nothing should be emitted.
     """
-    if full_response.strip() or tool_events:
+    if full_response.strip():
         return full_response, None
     if round_reasoning.strip():
         return round_reasoning, None
+    if orchestration_fallback.strip():
+        return orchestration_fallback, f'data: {json.dumps({"delta": orchestration_fallback})}\n\n'
+    if tool_events:
+        _error_msg = (
+            "Workspace tools finished but the model returned no summary. "
+            "Try again, switch to a larger model, or ask a narrower question."
+        )
+        return _error_msg, f'data: {json.dumps({"delta": _error_msg})}\n\n'
     _error_msg = "The model returned an empty response. Please try again or switch to a different model."
     return _error_msg, f'data: {json.dumps({"delta": _error_msg})}\n\n'
 
@@ -1726,10 +1811,14 @@ async def stream_agent_loop(
     # is treated as GNU make(1) and the user's words become build targets.
     try:
         from src.direct_shell import direct_shell_system_note, last_user_message
+        from src.workspace_analyze_intent import workspace_analyze_system_note
         from src.workspace_file_intent import workspace_file_create_system_note
         _user_cmd = last_user_message(messages)
         _exec_note = workspace_file_create_system_note(_user_cmd)
         _note_kind = "workspace-file-create"
+        if not _exec_note:
+            _exec_note = workspace_analyze_system_note(_user_cmd)
+            _note_kind = "workspace-analyze"
         if not _exec_note:
             _exec_note = direct_shell_system_note(_user_cmd)
             _note_kind = "direct-shell"
@@ -1737,6 +1826,8 @@ async def stream_agent_loop(
             _blocked = (
                 "write_file" in (disabled_tools or set())
                 if _note_kind == "workspace-file-create"
+                else "read_file" in (disabled_tools or set())
+                if _note_kind == "workspace-analyze"
                 else "bash" in (disabled_tools or set())
             )
             if not _blocked:
@@ -1771,51 +1862,11 @@ async def stream_agent_loop(
     prep_timings["prompt_build"] = time.time() - _t2
 
     _t3 = time.time()
-    try:
-        from src.context_compactor import trim_for_context
-        from src.context_budget import compute_input_token_budget, DEFAULT_HARD_MAX
-        from src.settings import is_setting_overridden
-
-        soft_budget = int(get_setting("agent_input_token_budget", 6000) or 0)
-        if soft_budget > 0:
-            before_trim_tokens = estimate_tokens(messages)
-            reserve_tokens = min(max(max_tokens or 1024, 512), 2048)
-            # Honour the configurable ceiling for the auto-derived budget path.
-            # No-op when the user has an explicit `agent_input_token_budget`
-            # (that branch ignores hard_max). Falls back to DEFAULT_HARD_MAX
-            # on missing/malformed values so misconfig can't zero the budget.
-            try:
-                hard_max = int(get_setting("agent_input_token_hard_max", DEFAULT_HARD_MAX) or DEFAULT_HARD_MAX)
-            except (TypeError, ValueError):
-                hard_max = DEFAULT_HARD_MAX
-            if hard_max <= 0:
-                hard_max = DEFAULT_HARD_MAX
-            # Scale the default budget to the model's context window so long-context
-            # models aren't silently capped at 6000; an explicit user setting is
-            # still honoured (clamped to the window). (#1170)
-            effective_budget = compute_input_token_budget(
-                soft_budget,
-                context_length,
-                is_setting_overridden("agent_input_token_budget"),
-                hard_max=hard_max,
-            )
-            trimmed_messages = trim_for_context(
-                messages,
-                effective_budget,
-                reserve_tokens=reserve_tokens,
-            )
-            after_trim_tokens = estimate_tokens(trimmed_messages)
-            if after_trim_tokens < before_trim_tokens:
-                logger.info(
-                    "[agent] soft-trimmed context: %s -> %s tokens (budget=%s, reserve=%s)",
-                    before_trim_tokens,
-                    after_trim_tokens,
-                    effective_budget,
-                    reserve_tokens,
-                )
-                messages = trimmed_messages
-    except Exception as e:
-        logger.warning("[agent] Soft context trim skipped: %s", e)
+    messages = _apply_agent_context_trim(
+        messages,
+        context_length=context_length,
+        max_tokens=max_tokens or 1024,
+    )
     prep_timings["context_trim"] = time.time() - _t3
 
     # Strip internal metadata keys before sending to the LLM API
@@ -1893,13 +1944,56 @@ async def stream_agent_loop(
     # using tools — i.e. it was cut off, not finished. Drives a "Continue" event
     # so the user can resume instead of the turn silently stalling.
     _exhausted_rounds = False
+    _orchestration_fallback = ""
 
-    # Auto-orchestration: run direct shell commands (npm start, pwd, …) and the
-    # next unchecked shell step from an approved plan without waiting for a
-    # weak model to emit a ```bash block.
-    # Auto-orchestration: run direct shell commands (npm start, pwd, …) and the
-    # next unchecked shell step from an approved plan without waiting for a
-    # weak model to emit a ```bash block.
+    # Auto-orchestration: workspace scan, numbered file writes, direct shell, plan steps.
+    if (
+        session_id
+        and "read_file" not in (disabled_tools or set())
+        and not plan_mode
+    ):
+        try:
+            from src.direct_shell import last_user_message
+            from src.workspace_analyze_orchestration import (
+                format_workspace_scan_sse,
+                run_auto_workspace_scan_if_needed,
+            )
+            _scan_user = last_user_message(messages)
+            _auto_scan = await run_auto_workspace_scan_if_needed(
+                user_msg=_scan_user,
+                workspace=workspace,
+                approved_plan=approved_plan or "",
+                session_id=session_id,
+                owner=owner,
+            )
+            if _auto_scan:
+                if _auto_scan.workspace:
+                    workspace = _auto_scan.workspace
+                for chunk in format_workspace_scan_sse(_auto_scan):
+                    yield chunk
+                tool_events.extend(_auto_scan.tool_events)
+                if _auto_scan.fallback_summary:
+                    _orchestration_fallback = _auto_scan.fallback_summary
+                scan_msg = {
+                    "role": "system",
+                    "content": _auto_scan.scan_context,
+                }
+                if messages and messages[0].get("role") == "system":
+                    messages.insert(1, scan_msg)
+                else:
+                    messages.insert(0, scan_msg)
+                messages.append({
+                    "role": "system",
+                    "content": _auto_scan.assistant_message,
+                })
+                messages = _apply_agent_context_trim(
+                    messages,
+                    context_length=context_length,
+                    max_tokens=max_tokens or 1024,
+                )
+        except Exception as _auto_scan_err:
+            logger.warning("[auto-workspace-scan] skipped: %s", _auto_scan_err)
+
     if session_id and "write_file" not in (disabled_tools or set()) and not plan_mode:
         try:
             from src.direct_shell import last_user_message
@@ -2830,7 +2924,8 @@ async def stream_agent_loop(
     # If the response is completely empty and no tools were executed,
     # yield a fallback message so the user is not left hanging.
     full_response, _fallback_chunk = _empty_response_fallback(
-        full_response, round_reasoning, tool_events
+        full_response, round_reasoning, tool_events,
+        orchestration_fallback=_orchestration_fallback,
     )
     if _fallback_chunk:
         yield _fallback_chunk
