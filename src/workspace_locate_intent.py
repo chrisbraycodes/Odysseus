@@ -65,6 +65,12 @@ def is_workspace_locate_request(text: str) -> bool:
         return True
     if _SITE_FEATURE.search(t) and re.search(r"\b(?:file|code|component|readme|github)\b", t, re.I):
         return True
+    try:
+        from src.intent_index import semantic_action_match
+        if semantic_action_match(t, "locate_code"):
+            return True
+    except Exception:
+        pass
     return False
 
 

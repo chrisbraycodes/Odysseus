@@ -670,6 +670,18 @@ async def _startup_event():
             logger.warning(f"Tool index warmup failed (non-critical): {type(e).__name__}: {e}")
 
     _startup_tasks.append(asyncio.create_task(_warmup_tool_index()))
+
+    async def _warmup_intent_index():
+        try:
+            from src.intent_index import get_intent_index
+            idx = await asyncio.to_thread(get_intent_index)
+            if idx:
+                await asyncio.to_thread(idx.match, "create numbered text files in workspace", min_score=0.0)
+                logger.info("[startup] Intent index pre-warmed")
+        except Exception as e:
+            logger.warning(f"Intent index warmup failed (non-critical): {type(e).__name__}: {e}")
+
+    _startup_tasks.append(asyncio.create_task(_warmup_intent_index()))
     # Warmup: ping all known LLM endpoints to prime connections
     async def _warmup_endpoints():
         try:

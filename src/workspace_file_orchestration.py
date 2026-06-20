@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
@@ -14,6 +15,13 @@ _NUMBERED_END = re.compile(
 )
 _NUMBERED_UP_TO = re.compile(r"\bup\s+to\s+(\d+)\b", re.I)
 _NAME_START = re.compile(r"\bname\s+(?:it|them|each)\s+(\d+)\b", re.I)
+_COUNT_TXT = re.compile(r"\b(?:create|make|generate|write|add)\s+(\d+)\s+\.?txt\b", re.I)
+_COUNT_TXT_FILES = re.compile(r"\b(\d+)\s+\.?txt\s+files?\b", re.I)
+_NUMBERED_START = re.compile(r"\b(?:numbered|labeled|called|named|starting\s+(?:at|from))\s+(\d+)\.txt\b", re.I)
+_IN_FILE_CONTENT = re.compile(
+    r"\b(?:in|for)\s+(\d+)\.txt\b[^0-9\n]{0,25}(\d+)\b",
+    re.I,
+)
 
 _BASH_FILE_CREATE = re.compile(
     r"(?:"
@@ -21,16 +29,55 @@ _BASH_FILE_CREATE = re.compile(
     r"|(?:^|[;\n])\s*while\b[^;\n]*(?:>|>>|\becho\b)"
     r"|\becho\b[^;\n|&]*(?:>|>>)"
     r"|\btouch\b"
+    r"|(?:^|[;\n])\s*make\s+\d+\s*$"
     r"|\brm\b[^;\n]*\*\s*$"
     r")",
     re.I | re.M,
 )
 
 
-def parse_numbered_file_batch(text: str, *, max_files: int = 50) -> Optional[List[Tuple[str, str]]]:
-    """Parse requests like 'name it 1 … incrementing up to 10' into (path, content) pairs."""
-    if not text or not is_workspace_file_create_request(text):
+def _parse_counted_txt_batch(text: str, *, max_files: int) -> Optional[List[Tuple[str, str]]]:
+    """Parse 'create 10 txt files numbered 1.txt … in 1.txt 10, in 2.txt 9 …'."""
+    count_m = _COUNT_TXT.search(text) or _COUNT_TXT_FILES.search(text)
+    if not count_m:
         return None
+    try:
+        count = int(count_m.group(1))
+    except (TypeError, ValueError):
+        return None
+    if count < 1 or count > max_files:
+        return None
+
+    start_m = _NUMBERED_START.search(text)
+    if start_m:
+        start = int(start_m.group(1))
+    else:
+        list_m = re.search(r"\b(?:numbered|labeled|called|named)\b[^.\n]{0,40}\b(\d+)\.txt\b", text, re.I)
+        start = int(list_m.group(1)) if list_m else 1
+    end = start + count - 1
+
+    ext = ".txt" if re.search(r"\btxt\b|text\s+file", text, re.I) else ""
+    pairs = sorted((int(a), int(b)) for a, b in _IN_FILE_CONTENT.findall(text))
+    if len(pairs) >= 2:
+        i1, c1 = pairs[0]
+        i2, c2 = pairs[1]
+        if i2 == i1:
+            return None
+        step = (c2 - c1) / (i2 - i1)
+        if step != int(step):
+            return None
+        step = int(step)
+        specs: List[Tuple[str, str]] = []
+        for i in range(start, end + 1):
+            content = str(int(c1 + step * (i - i1)))
+            specs.append((f"{i}{ext}", content))
+        return specs
+
+    return [(f"{i}{ext}", str(i)) for i in range(start, end + 1)]
+
+
+def _parse_increment_batch(text: str, *, max_files: int) -> Optional[List[Tuple[str, str]]]:
+    """Parse 'name it 1 … incrementing up to 10' into (path, content) pairs."""
     end_m = _NUMBERED_END.search(text) or _NUMBERED_UP_TO.search(text)
     if not end_m:
         return None
@@ -44,6 +91,15 @@ def parse_numbered_file_batch(text: str, *, max_files: int = 50) -> Optional[Lis
         return None
     ext = ".txt" if re.search(r"\btxt\b|text\s+file", text, re.I) else ""
     return [(f"{i}{ext}", str(i)) for i in range(start, end + 1)]
+
+
+def parse_numbered_file_batch(text: str, *, max_files: int = 50) -> Optional[List[Tuple[str, str]]]:
+    """Parse numbered multi-file create requests into (path, content) pairs."""
+    if not text or not is_workspace_file_create_request(text):
+        return None
+    return _parse_counted_txt_batch(text, max_files=max_files) or _parse_increment_batch(
+        text, max_files=max_files
+    )
 
 
 def is_bash_file_creation_attempt(command: str) -> bool:

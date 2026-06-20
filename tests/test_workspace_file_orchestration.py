@@ -22,6 +22,40 @@ def test_bash_loop_redirect_blocked():
     assert is_bash_file_creation_attempt(cmd)
 
 
+_USER_DESCENDING = (
+    "create 10 txt files numbered 1.txt, 2.txt and so on and inside them "
+    "write in 1.txt 10, and in 2.txt 9 and so on"
+)
+
+
+def test_parse_descending_numbered_batch():
+    batch = parse_numbered_file_batch(_USER_DESCENDING)
+    assert batch is not None
+    assert len(batch) == 10
+    assert batch[0] == ("1.txt", "10")
+    assert batch[1] == ("2.txt", "9")
+    assert batch[9] == ("10.txt", "1")
+
+
+def test_multiline_write_file_parsing():
+    import src.agent_tools  # noqa: F401
+    from src.tool_parsing import _parse_inline_write_file_lines
+    prose = (
+        "# Step 1: Create and write to 1.txt\n"
+        "write_file\n"
+        "1.txt\n"
+        "10\n\n"
+        "# Step 2: Create and write to 2.txt\n"
+        "write_file\n"
+        "2.txt\n"
+        "9\n"
+    )
+    blocks = _parse_inline_write_file_lines(prose)
+    assert len(blocks) == 2
+    assert blocks[0].content == "1.txt\n10"
+    assert blocks[1].content == "2.txt\n9"
+
+
 def test_inline_write_file_parsing():
     import src.agent_tools  # noqa: F401 — break tool_parsing ↔ agent_tools cycle
     from src.tool_parsing import _parse_inline_write_file_lines

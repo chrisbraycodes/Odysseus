@@ -8,7 +8,7 @@ import json
 import logging
 import socket
 import subprocess
-from typing import Optional, Tuple, Dict
+from typing import Dict, List, Optional, Tuple
 from urllib.parse import urlparse, urlunparse
 
 from core.database import SessionLocal, ModelEndpoint
@@ -128,6 +128,29 @@ def resolve_url(url: str) -> str:
             netloc = f"{ip}:{parsed.port}"
         return urlunparse(parsed._replace(netloc=netloc))
     return url
+
+
+def endpoint_lookup_keys(endpoint_url: str) -> List[str]:
+    """Candidate ModelEndpoint.base_url keys for a runtime chat URL."""
+    raw = (endpoint_url or "").strip()
+    keys: List[str] = []
+
+    def add(value: str):
+        value = (value or "").strip()
+        if value and value not in keys:
+            keys.append(value)
+        trimmed = value.rstrip("/")
+        if trimmed and trimmed not in keys:
+            keys.append(trimmed)
+        if trimmed and f"{trimmed}/" not in keys:
+            keys.append(f"{trimmed}/")
+
+    add(raw)
+    try:
+        add(normalize_base(raw))
+    except Exception:
+        pass
+    return keys
 
 
 def normalize_base(url: str) -> str:

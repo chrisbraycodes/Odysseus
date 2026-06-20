@@ -1114,11 +1114,25 @@ def setup_chat_routes(
                     if workspace and _raw_workspace and workspace != _raw_workspace:
                         yield f'data: {json.dumps({"type": "workspace_resolved", "data": {"path": workspace, "from": _raw_workspace}})}\n\n'
 
+                    from src.agent_model_router import resolve_agent_model
+                    _agent_url, _agent_model, _agent_headers, _agent_fallbacks, _route_reason = (
+                        resolve_agent_model(
+                            sess.endpoint_url,
+                            sess.model,
+                            sess.headers,
+                            owner=_user,
+                            fallbacks=_fallback_candidates,
+                            tools_needed=True,
+                        )
+                    )
+                    if _route_reason != "session" and _agent_model != sess.model:
+                        yield f'data: {json.dumps({"type": "model_info", "model": _agent_model, "suffix": "Agent"})}\n\n'
+
                     async for chunk in stream_agent_loop(
-                        sess.endpoint_url,
-                        sess.model,
+                        _agent_url,
+                        _agent_model,
                         messages,
-                        headers=sess.headers,
+                        headers=_agent_headers,
                         temperature=ctx.preset.temperature,
                         max_tokens=ctx.preset.max_tokens,
                         prompt_type=preset_id,
@@ -1129,7 +1143,7 @@ def setup_chat_routes(
                         session_id=session,
                         disabled_tools=disabled_tools if disabled_tools else None,
                         owner=_user,
-                        fallbacks=_fallback_candidates,
+                        fallbacks=_agent_fallbacks,
                         workspace=workspace or None,
                         plan_mode=plan_mode,
                         approved_plan=approved_plan or None,

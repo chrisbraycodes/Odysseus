@@ -5,8 +5,8 @@ from __future__ import annotations
 import re
 from typing import Optional
 
-_CREATE_VERB = r"(?:make|create|write|save|add|generate)"
-_FILE_NOUN = r"(?:txt|text\s+file|file|files|document|documents)"
+_CREATE_VERB = r"(?:make|create|write|save|add|generate|produce|output|put|dump|touch|build|new|spin\s+up|set\s+up|give\s+me)"
+_FILE_NOUN = r"(?:txt|text\s+file|file|files|document|documents|doc|docs|log|note|notes|script|scripts)"
 
 _FILE_CREATE = re.compile(
     rf"\b(?:{_CREATE_VERB})\s+(?:a\s+|an\s+|the\s+|some\s+|my\s+)?(?:\w+\s+){{0,5}}{_FILE_NOUN}\b",
@@ -35,6 +35,12 @@ def is_workspace_file_create_request(text: str) -> bool:
         return True
     if _UP_TO.search(t) and _NAME_IT.search(t):
         return True
+    try:
+        from src.intent_index import semantic_action_match
+        if semantic_action_match(t, "create_files"):
+            return True
+    except Exception:
+        pass
     return False
 
 

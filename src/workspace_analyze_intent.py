@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from typing import Optional
 
-_ANALYZE_VERB = r"(?:analyze|analyse|review|explore|inspect|audit|summarize|summarise|explain|describe|understand|tell\s+me\s+about)"
+_ANALYZE_VERB = r"(?:analyze|analyse|review|explore|inspect|audit|summarize|summarise|explain|describe|understand|tell\s+me\s+about|examine|investigate|walk\s+(?:me\s+)?through|check\s+out|go\s+through|look\s+at|give\s+(?:me\s+)?an?\s+overview\s+of|overview|break\s+down|dig\s+into)"
 _TARGET = r"(?:this\s+)?(?:project|codebase|workspace|repo(?:sitory)?|app(?:lication)?|website|site|code|folder|directory|whole\s+workspace)"
 
 _ANALYZE_TARGET = re.compile(
@@ -53,6 +53,12 @@ def is_workspace_analyze_request(text: str) -> bool:
         return True
     if _ACCESS_QUESTION.search(t):
         return True
+    try:
+        from src.intent_index import semantic_action_match
+        if semantic_action_match(t, "analyze_repo"):
+            return True
+    except Exception:
+        pass
     return False
 
 

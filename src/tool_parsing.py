@@ -284,16 +284,44 @@ _INLINE_WRITE_FILE_RE = re.compile(
     r"(?:^|\n)\s*(?:[-*]\s*)?write_file\s+file=(\S+)\s+content=(.+?)\s*$",
     re.I | re.M,
 )
+_INLINE_WRITE_FILE_SIMPLE_RE = re.compile(
+    r"(?:^|\n)\s*(?:[-*]\s*)?write_file\s+(?!file=)(\S+)\s+(\S+)\s*$",
+    re.I | re.M,
+)
+_MULTILINE_WRITE_FILE_RE = re.compile(
+    r"(?:^|\n)\s*(?:#.*?(?:\n\s*)?)?(?:[-*]\s*)?write_file\s*\n\s*(\S+)\s*\n\s*([^\n`]+)",
+    re.I | re.M,
+)
 
 
 def _parse_inline_write_file_lines(text: str) -> List[ToolBlock]:
     """Recover write_file calls written as prose (common with small local models)."""
     blocks: List[ToolBlock] = []
+    seen: set = set()
     for m in _INLINE_WRITE_FILE_RE.finditer(text or ""):
         path = (m.group(1) or "").strip().strip("'\"")
         body = (m.group(2) or "").strip().strip("'\"")
         if path:
-            blocks.append(ToolBlock("write_file", f"{path}\n{body}"))
+            key = (path, body)
+            if key not in seen:
+                seen.add(key)
+                blocks.append(ToolBlock("write_file", f"{path}\n{body}"))
+    for m in _INLINE_WRITE_FILE_SIMPLE_RE.finditer(text or ""):
+        path = (m.group(1) or "").strip().strip("'\"")
+        body = (m.group(2) or "").strip().strip("'\"")
+        if path and path.lower() != "write_file":
+            key = (path, body)
+            if key not in seen:
+                seen.add(key)
+                blocks.append(ToolBlock("write_file", f"{path}\n{body}"))
+    for m in _MULTILINE_WRITE_FILE_RE.finditer(text or ""):
+        path = (m.group(1) or "").strip().strip("'\"")
+        body = (m.group(2) or "").strip().strip("'\"")
+        if path and path.lower() != "write_file":
+            key = (path, body)
+            if key not in seen:
+                seen.add(key)
+                blocks.append(ToolBlock("write_file", f"{path}\n{body}"))
     return blocks
 
 

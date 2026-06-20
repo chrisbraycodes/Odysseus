@@ -130,6 +130,12 @@ DEFAULT_SETTINGS = {
     # Ordered fallback chain for the Utility model (summarization, naming,
     # tidy actions, etc.).
     "utility_model_fallbacks": [],
+    # Agent-mode tool turns: stronger model for reliable tool calling (optional).
+    # When set, agent mode uses this instead of the session's chat model.
+    # Leave empty to auto-upgrade 7B→14B+ on the same endpoint when available.
+    "agent_endpoint_id": "",
+    "agent_model": "",
+    "agent_model_fallbacks": [],
     "teacher_model": "",
     "teacher_enabled": False,
     # Skills: minimum self-reported confidence for an auto-written (LLM-authored)
@@ -246,6 +252,7 @@ _PER_USER_KEYS = {
     # got injected into the chat composer on first open.
     "default_endpoint_id", "default_model", "default_model_fallbacks",
     "utility_endpoint_id", "utility_model", "utility_model_fallbacks",
+    "agent_endpoint_id", "agent_model", "agent_model_fallbacks",
     "research_endpoint_id", "research_model",
 }
 

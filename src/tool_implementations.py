@@ -1532,6 +1532,8 @@ async def do_manage_settings(content: str, owner: Optional[str] = None) -> Dict:
             "task model": "task_model", "background model": "task_model",
             "teacher model": "teacher_model", "teacher": "teacher_enabled",
             "utility model": "utility_model", "research model": "research_model",
+            "agent model": "agent_model", "agent endpoint": "agent_endpoint_id",
+            "tool model": "agent_model",
             "research max tokens": "research_max_tokens",
             "vision model": "vision_model", "vision": "vision_enabled",
             "image model": "image_model", "image quality": "image_quality",
@@ -1652,7 +1654,7 @@ async def do_manage_settings(content: str, owner: Optional[str] = None) -> Dict:
                 return {"error": f"{key} must be one of: {', '.join(_ENUMS[key])}.", "exit_code": 1}
             s = load_settings()
             s[key] = value
-            if key in {"default_model", "research_model", "utility_model", "task_model", "vision_model", "image_model"}:
+            if key in {"default_model", "research_model", "utility_model", "task_model", "agent_model", "vision_model", "image_model"}:
                 resolved = _endpoint_model_from_cache(str(value))
                 if resolved:
                     prefix = key[:-6]

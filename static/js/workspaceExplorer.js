@@ -14,7 +14,6 @@ import {
   openWorkspaceBrowser,
   whenWorkspaceReady,
   isDockerWorkspace,
-  WORKSPACE_VERIFIED_EVENT,
 } from './workspace.js';
 import { createWorkspaceTerminalPanel } from './workspaceTerminal.js';
 import { mountWsPanelResize, unmountWsPanelResize, refreshWsPanelResize } from './wsPanelResize.js';
@@ -43,6 +42,7 @@ let _terminal = null;
 let _lastSyncedRoot = '';
 let _loadTreeGen = 0;
 let _loadTreeInflight = null;
+let _restoreIdeInflight = null;
 
 function _syncTreeFileTabState() {
   const body = _pane?.querySelector('#ws-tree-body');
@@ -55,8 +55,24 @@ function _syncTreeFileTabState() {
   });
 }
 
-function _treeHasRows() {
-  return !!_pane?.querySelector('#ws-tree-body .ws-tree-row');
+function _treeBodyEl() {
+  return _pane?.querySelector('#ws-tree-body');
+}
+
+/** True once the tree body has any rendered state (files, empty folder, or error). */
+function _treeHasContent() {
+  const body = _treeBodyEl();
+  if (!body) return false;
+  return !!(
+    body.querySelector('.ws-tree-row')
+    || body.querySelector('.ws-explorer-empty')
+    || body.querySelector('.ws-tree-error')
+  );
+}
+
+function _treeBodyIsBlank() {
+  const body = _treeBodyEl();
+  return !body || body.childElementCount === 0;
 }
 
 function _wsRoot() {
@@ -340,7 +356,7 @@ async function _loadTree(path = _treePath, { silent = false } = {}) {
       root = await _verifiedRoot();
     } catch (_) {
       if (gen !== _loadTreeGen) return;
-      if (_treeHasRows()) {
+      if (_treeHasContent()) {
         _syncTreeFileTabState();
         return;
       }
@@ -348,12 +364,11 @@ async function _loadTree(path = _treePath, { silent = false } = {}) {
       return;
     }
     if (!_pane || gen !== _loadTreeGen) return;
-    const prevPath = _treePath;
     _treePath = path;
     const pathEl = _pane.querySelector('#ws-tree-path');
     if (pathEl) pathEl.textContent = path ? `/${path}` : '';
     const body = _pane.querySelector('#ws-tree-body');
-    const showLoading = !silent && (!_treeHasRows() || path !== prevPath);
+    const showLoading = !silent && _treeBodyIsBlank();
     if (body && showLoading) body.innerHTML = '<div class="ws-explorer-loading">Loading…</div>';
     try {
       const data = await _fetchList(root, path);
@@ -362,7 +377,7 @@ async function _loadTree(path = _treePath, { silent = false } = {}) {
       _renderTree(data);
     } catch (e) {
       if (gen !== _loadTreeGen || !_pane) return;
-      if (_treeHasRows()) {
+      if (_treeHasContent()) {
         const banner = _pane.querySelector('#ws-tree-status');
         if (banner) {
           banner.textContent = e.message || 'Could not refresh folder';
@@ -1068,13 +1083,17 @@ async function _syncExplorerToWorkspace({ clearEditorTabs = false } = {}) {
 
   const rootChanged = _lastSyncedRoot !== verified.path;
   _lastSyncedRoot = verified.path;
-  _treePath = '';
-  _expanded = new Set(['']);
+  if (rootChanged) {
+    _treePath = '';
+    _expanded = new Set(['']);
+    const body = _treeBodyEl();
+    if (body) body.innerHTML = '';
+  }
   if (clearEditorTabs || rootChanged) _docMod()?.clearWorkspaceFiles?.();
   _syncWorkspaceLabel();
   if (rootChanged) _mountTerminal({ force: true });
   else _prepareWorkspaceTerminal();
-  await _loadTree('');
+  await _loadTree(_treePath, { silent: !rootChanged });
   _notifyTerminalLayout();
   return true;
 }
@@ -1151,7 +1170,7 @@ function _onWorkspaceFileTabsChanged() {
 }
 
 /** Restore file tree + terminal from verified workspace store (survives browser refresh). */
-export async function restoreWorkspaceIde() {
+async function _restoreWorkspaceIdeImpl() {
   await whenWorkspaceReady();
   const verified = await ensureVerifiedWorkspace();
   const ws = verified?.path || '';
@@ -1184,6 +1203,14 @@ export async function restoreWorkspaceIde() {
   _notifyTerminalLayout();
 }
 
+export async function restoreWorkspaceIde() {
+  if (_restoreIdeInflight) return _restoreIdeInflight;
+  _restoreIdeInflight = _restoreWorkspaceIdeImpl().finally(() => {
+    if (_restoreIdeInflight) _restoreIdeInflight = null;
+  });
+  return _restoreIdeInflight;
+}
+
 function _clearDesktopPanelInlineStyles() {
   if (_isMobileLayout()) return;
   document.body.classList.remove('ws-mob-view');
@@ -1212,9 +1239,6 @@ export function initWorkspaceExplorer() {
   });
   document.addEventListener('ws-panel-layout-mounted', _clearWorkbenchRefs);
   document.addEventListener('workspace-environment-ready', () => {
-    restoreWorkspaceIde().catch(() => {});
-  });
-  document.addEventListener(WORKSPACE_VERIFIED_EVENT, () => {
     restoreWorkspaceIde().catch(() => {});
   });
   document.addEventListener('workspace-changed', _onWorkspaceChanged);

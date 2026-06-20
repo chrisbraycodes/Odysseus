@@ -554,26 +554,14 @@ def _is_ollama_openai_compat_url(endpoint_url: str) -> bool:
 
 def _endpoint_lookup_keys(endpoint_url: str) -> List[str]:
     """Candidate ModelEndpoint.base_url keys for a runtime chat URL."""
-    raw = (endpoint_url or "").strip()
-    keys: List[str] = []
+    from src.endpoint_resolver import endpoint_lookup_keys
+    return endpoint_lookup_keys(endpoint_url)
 
-    def add(value: str):
-        value = (value or "").strip()
-        if value and value not in keys:
-            keys.append(value)
-        trimmed = value.rstrip("/")
-        if trimmed and trimmed not in keys:
-            keys.append(trimmed)
-        if trimmed and f"{trimmed}/" not in keys:
-            keys.append(f"{trimmed}/")
 
-    add(raw)
-    try:
-        from src.endpoint_resolver import normalize_base
-        add(normalize_base(raw))
-    except Exception:
-        pass
-    return keys
+def endpoint_lookup_keys(endpoint_url: str) -> List[str]:
+    """Public alias — see src.endpoint_resolver.endpoint_lookup_keys."""
+    return _endpoint_lookup_keys(endpoint_url)
+
 
 # Admin tool keywords — if the last user message contains any of these, include admin tools
 _ADMIN_KEYWORDS = [
@@ -1720,11 +1708,35 @@ async def stream_agent_loop(
         or _model_no_tools
         or _is_ollama_native
         or _ollama_openai_compat
-        or (_is_local_endpoint and _endpoint_supports is not True)
+        or (_is_local_endpoint and _endpoint_supports is not True and not _model_supports_tools)
     ):
         _is_api_model = False
     else:
         _is_api_model = any(h in endpoint_url for h in _API_HOSTS) or _model_supports_tools
+    if (
+        _is_api_model
+        and _endpoint_supports is None
+        and _model_supports_tools
+        and not _is_ollama_native
+        and not _ollama_openai_compat
+    ):
+        try:
+            from core.database import SessionLocal as _SL2, ModelEndpoint as _ME2
+            _db2 = _SL2()
+            try:
+                _ep2 = None
+                for _key in _endpoint_lookup_keys(endpoint_url):
+                    _ep2 = _db2.query(_ME2).filter(_ME2.base_url == _key).first()
+                    if _ep2:
+                        break
+                if _ep2 is not None and _ep2.supports_tools is None:
+                    _ep2.supports_tools = True
+                    _db2.commit()
+                    logger.info("[agent] auto-enabled supports_tools for endpoint %s", _ep2.id)
+            finally:
+                _db2.close()
+        except Exception as _st_err:
+            logger.debug("supports_tools auto-enable skipped: %s", _st_err)
     messages, mcp_schemas = _build_system_prompt(
         messages, model, active_document, mcp_mgr, disabled_tools,
         needs_admin=_needs_admin, relevant_tools=_relevant_tools,
@@ -2100,12 +2112,12 @@ async def stream_agent_loop(
     if session_id and "write_file" not in (disabled_tools or set()) and not plan_mode:
         try:
             from src.direct_shell import last_user_message
-            from src.workspace_file_orchestration import (
+            from src.workspace_intent_planner import (
                 format_write_files_sse,
-                run_auto_write_files_if_needed,
+                run_planned_write_files_if_needed,
             )
             _auto_user = last_user_message(messages)
-            _auto_write = await run_auto_write_files_if_needed(
+            _auto_write = await run_planned_write_files_if_needed(
                 user_msg=_auto_user,
                 workspace=workspace,
                 approved_plan=approved_plan or "",
@@ -2637,12 +2649,26 @@ async def stream_agent_loop(
                     "one sentence instead of restating the plan."
                 )
                 if _looks_like_tutorial:
-                    _nudge = (
-                        "You wrote a tutorial instead of using tools. STOP. "
-                        "The user wants you to EXECUTE, not explain. "
-                        "Respond with ONE ```bash``` block for the next concrete "
-                        "step (or say BLOCKED in one sentence if you truly cannot)."
-                    )
+                    try:
+                        from src.direct_shell import last_user_message
+                        from src.workspace_file_intent import is_workspace_file_create_request
+                        _wants_files = is_workspace_file_create_request(last_user_message(messages))
+                    except Exception:
+                        _wants_files = False
+                    if _wants_files:
+                        _nudge = (
+                            "You wrote a tutorial instead of using tools. STOP. "
+                            "The user wants FILES CREATED in the workspace — not prose. "
+                            "Emit ```write_file``` blocks now (path on line 1, content below). "
+                            "One block per file. No bash, echo, or fake 'Step N: Created' claims."
+                        )
+                    else:
+                        _nudge = (
+                            "You wrote a tutorial instead of using tools. STOP. "
+                            "The user wants you to EXECUTE, not explain. "
+                            "Respond with ONE ```bash``` block for the next concrete "
+                            "step (or say BLOCKED in one sentence if you truly cannot)."
+                        )
                 elif _looks_like_cat_prose:
                     _nudge = (
                         "You wrote prose shell commands (`cat ...`) — those do NOT "
